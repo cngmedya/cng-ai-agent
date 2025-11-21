@@ -1,21 +1,57 @@
+// backend/src/app.js
+
 const express = require("express");
 const cors = require("cors");
 const { config } = require("./config/env");
 const { log } = require("./lib/logger");
-const aiRoutes = require("./routes/aiRoutes"); // ← ÖNEMLİ: süslü parantez YOK, .js yazmasan da olur
 
+// Routes
+const aiRoutes = require("./routes/aiRoutes");
+const leadRoutes = require("./lead-engine/leadRoutes");
+const offerRoutes = require("./offers/offerRoutes");
+const crmRoutes = require("./routes/crmRoutes");
+const healthRoutes = require("./routes/healthRoutes");
+const whatsappRoutes = require("./routes/whatsappRoutes");
+const seoRoutes = require("./routes/seoRoutes");
+const adsRoutes = require("./routes/adsRoutes");
+const socialRoutes = require("./routes/socialRoutes");
+const campaignRoutes = require("./routes/campaignRoutes");
+const dashboardRoutes = require("./routes/dashboardRoutes"); // 🔹 YENİ
+const workerRoutes = require("./routes/workerRoutes"); // 🔹 YENİ
+
+// Middleware
+const { apiKeyAuth } = require("./middleware/apiKeyAuth");
+
+// 🔹 Önce app'i oluşturacağız
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// Basit health check
+// Basit root health check (korumasız)
 app.get("/", (req, res) => {
   res.json({ ok: true, message: "CNG Medya AI Agent backend çalışıyor." });
 });
 
-// AI endpointleri
-app.use("/api/ai", aiRoutes);
+// Derin health check (env + CRM vs.)
+app.use("/api/health", healthRoutes);
+
+// 🔹 WhatsApp webhook: BURADA API KEY YOK!
+// Meta kendi doğrulamasını yapıyor (verify_token).
+app.use("/api/whatsapp", whatsappRoutes);
+
+// 🔐 API KEY ile korunan core endpointler
+app.use("/api/ai", apiKeyAuth, aiRoutes);
+app.use("/api/leads", apiKeyAuth, leadRoutes);
+app.use("/api/offers", apiKeyAuth, offerRoutes);
+app.use("/api/crm", apiKeyAuth, crmRoutes);
+app.use("/api/seo", apiKeyAuth, seoRoutes);
+app.use("/api/ads", apiKeyAuth, adsRoutes);
+app.use("/api/social", apiKeyAuth, socialRoutes);
+app.use("/api/campaigns", apiKeyAuth, campaignRoutes);
+app.use("/api/dashboard", apiKeyAuth, dashboardRoutes); // 🔹 YENİ
+app.use("/api/worker", apiKeyAuth, workerRoutes); // 🔹 YENİ
+
 
 // Server'ı başlat
 app.listen(config.port, () => {

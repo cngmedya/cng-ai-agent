@@ -6,6 +6,21 @@ node_modules
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+backend/node_modules
+backend/package-lock.json
+
+# Env & local db
+backend/.env
+backend/cng-ai-agent.db
+*.db
+
+# Temp / test files
+last_leads.json
+lead_oso.json
+offer_payload.json
+whatsapp_memory
+backend/test-*.json*
+
 
 # Env
 .env

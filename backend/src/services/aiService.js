@@ -1,43 +1,60 @@
+// backend/src/services/aiService.js
+
+const OpenAI = require("openai");
 const { config } = require("../config/env");
 const { log } = require("../lib/logger");
+const { loadCombinedPrompts } = require("./promptService");
 
-const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
-const MODEL = "gpt-4.1"; // gerekirse değiştiririz
+const client = new OpenAI({
+  apiKey: config.openaiApiKey,
+});
 
-async function callAgent({ systemPrompt, userMessage }) {
-  if (!config.openaiApiKey) {
-    throw new Error("OPENAI_API_KEY tanımlı değil.");
+/**
+ * Genel amaçlı AI çağrısı.
+ * Tüm modüller burayı kullanıyor.
+ */
+async function callAgent({
+  systemPrompt = "",
+  userMessage,
+  model = config.openaiModel || "gpt-4.1-mini",
+  temperature = 0.4,
+  maxTokens = 2000,
+  useUniversalBrain = true,
+}) {
+  if (!userMessage) {
+    throw new Error("callAgent userMessage zorunludur.");
   }
 
-  const body = {
-    model: MODEL,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userMessage },
-    ],
-  };
+  let finalSystemPrompt = systemPrompt || "";
+
+  if (useUniversalBrain) {
+    const universal = loadCombinedPrompts([
+      "universal/brain.md",
+      "universal/voice_style.md",
+    ]);
+
+    if (universal && universal.trim().length > 0) {
+      finalSystemPrompt = `${universal}\n\n${systemPrompt || ""}`.trim();
+    }
+  }
 
   try {
-    const res = await fetch(OPENAI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.openaiApiKey}`,
-      },
-      body: JSON.stringify(body),
+    const completion = await client.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: finalSystemPrompt },
+        { role: "user", content: userMessage },
+      ],
+      temperature,
+      max_tokens: maxTokens,
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      log.error("OpenAI error:", res.status, text);
-      throw new Error(`OpenAI API hatası: ${res.status}`);
-    }
-
-    const data = await res.json();
-    const answer = data?.choices?.[0]?.message?.content || "";
-    return answer.trim();
+    const content =
+      completion.choices?.[0]?.message?.content?.trim() ||
+      "(boş yanıt döndü)";
+    return content;
   } catch (err) {
-    log.error("callAgent exception:", err);
+    log.error("callAgent error:", err);
     throw err;
   }
 }
