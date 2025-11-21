@@ -2,261 +2,201 @@
 
 const { getCrmDb } = require("../../../db/db");
 const { log } = require("../../../lib/logger");
-const websiteIntelService = require("./websiteIntelService");
+const { enrichWebsiteFromUrl } = require("./websiteIntelService");
 
 /**
- * Türkçe karakterleri domain uyumlu hale getir
+ * Firma adını slug'a çevir:
+ *  - Türkçe karakter temizleme
+ *  - sadece harf + rakam
+ *  - boşlukları kaldır
  */
-function toAscii(str) {
-  if (!str) return "";
-  return str
-    .replace(/ğ/gi, "g")
-    .replace(/ü/gi, "u")
-    .replace(/ş/gi, "s")
-    .replace(/ı/gi, "i")
-    .replace(/İ/g, "i")
-    .replace(/ö/gi, "o")
-    .replace(/ç/gi, "c");
+function slugify(text) {
+  if (!text) return "";
+
+  const map = {
+    ç: "c",
+    Ç: "c",
+    ğ: "g",
+    Ğ: "g",
+    ı: "i",
+    İ: "i",
+    ö: "o",
+    Ö: "o",
+    ş: "s",
+    Ş: "s",
+    ü: "u",
+    Ü: "u",
+  };
+
+  let t = String(text)
+    .split("")
+    .map((ch) => map[ch] || ch)
+    .join("");
+
+  // harf ve rakam dışını temizle
+  t = t.toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+  return t;
 }
 
 /**
- * Firma adından domain için kullanılabilir bir "slug" üret
- * Örn:
- *  "ARIN UYGUR MİMARLIK & İÇMİMARLIK - İstanbul Mimarlık Ofisi | Proje Tasarım & Uygulama"
- *   → "arinuygur"
+ * Domain root için generic / yasak kelimeler:
+ *  - Bunlar marka olmaz, sadece sonuna eklenir
  */
-function buildDomainBaseFromCompanyName(companyName) {
-  if (!companyName) return null;
-
-  let s = String(companyName).toLowerCase().trim();
-
-  // Pipe ve tire sonrası açıklamaları at
-  if (s.includes("|")) {
-    s = s.split("|")[0].trim();
-  }
-  if (s.includes(" - ")) {
-    s = s.split(" - ")[0].trim();
-  }
-
-  // Parantez içlerini temizle
-  s = s.replace(/\(.*?\)/g, " ");
-
-  // Türkçe karakterleri ascii'ye çevir
-  s = toAscii(s);
-
-  // Gereksiz kelimeleri temizle
-  const stopWords = [
-    "mimarlik",
-    "ic",
-    "iç",
-    "icmimarlik",
-    "office",
-    "ofis",
-    "ofisi",
-    "tasarim",
-    "tasarım",
-    "design",
-    "architecture",
-    "architect",
-    "proje",
-    "yapi",
-    "yapı",
-    "insaat",
-    "inşaat",
-    "limited",
-    "ltd",
-    "sti",
-    "şti",
-    "a.s",
-    "a.ş",
-    "sanayi",
-    "ticaret",
-    "ve",
-    "veya",
-    "grup",
-    "group",
-    "co",
-    "company",
-  ];
-
-  // Harf/digit olmayan karakterleri space'e çevir
-  s = s.replace(/[^a-z0-9]+/g, " ");
-
-  let tokens = s
-    .split(" ")
-    .map((t) => t.trim())
-    .filter((t) => t && !stopWords.includes(t));
-
-  if (!tokens.length) {
-    return null;
-  }
-
-  // En fazla 2 token birleştirelim
-  let base = tokens.slice(0, 2).join("");
-
-  // Tekrar non-alnum temizliği
-  base = base.replace(/[^a-z0-9]/g, "");
-
-  // Çok kısa ise tüm stringten biraz toparlamaya çalış
-  if (base.length < 4) {
-    base = tokens.join("").replace(/[^a-z0-9]/g, "");
-  }
-
-  if (!base) return null;
-
-  // Maksimum 15 karakter
-  if (base.length > 15) {
-    base = base.slice(0, 15);
-  }
-
-  return base;
-}
+const STOP_ROOTS = [
+  "mimarlik",
+  "icmimarlik",
+  "mimar",
+  "icmimar",
+  "tasarim",
+  "design",
+  "architecture",
+  "insaat",
+  "yapi",
+  "yapı",
+  "gayrimenkul",
+  "proje",
+  "ofis",
+  "ofisi",
+  "office",
+];
 
 /**
- * Lead için domain adayları üret
- * - max 5 adet
- * - domain uzunluğu makul (ör: 30 karakter üstünü çöpe at)
+ * Şirket isminden domain root adayları üret
+ * Kurallar:
+ *  - sadece şirket adı / unvandan gelsin (adres, şehir yok)
+ *  - max 3 kelime → brand + 0/1/2 extra kelime
+ *  - brand: ilk STOP_ROOTS olmayan kelime
+ *  - ekstra kelimeler: şirket isminden gelen, STOP_ROOTS da olabilir (ek olarak kullanılabilir)
+ *  - her root max 15 karaktere kesilir
  */
-function generateDomainGuessesForLead(lead) {
-  const { company_name } = lead;
+function buildDomainRootCandidates(companyName) {
+  if (!companyName) return [];
 
-  const base = buildDomainBaseFromCompanyName(company_name);
-  if (!base) {
-    return [];
-  }
+  const roots = [];
 
-  const candidates = new Set();
+  const raw = companyName
+    .replace(/\|.*/g, "") // '|' sonrası açıklamaları at
+    .replace(/- .*$/g, "") // '-' sonrası slogan vs.
+    .replace(/\(.*?\)/g, ""); // parantez içlerini at
 
-  // Temel kombinasyonlar
-  candidates.add(`${base}.com`);
-  candidates.add(`${base}.com.tr`);
+  const words = raw
+    .split(/\s+/g)
+    .map((w) => slugify(w))
+    .filter(Boolean);
 
-  // Birkaç varyasyon daha (çok abartmadan)
-  if (base.length > 6) {
-    const short = base.slice(0, 10);
-    candidates.add(`${short}.com`);
-    candidates.add(`${short}.com.tr`);
-  }
+  if (!words.length) return [];
 
-  // Filtre: çok uzun domainleri at
-  const filtered = Array.from(candidates).filter(
-    (d) => d.length <= 30 && d.includes(".")
-  );
+  // Brand = ilk STOP_ROOTS olmayan kelime
+  let brand = null;
+  let rest = [];
 
-  // Max 5 aday
-  return filtered.slice(0, 5);
-}
-
-/**
- * Domain Discovery V2 – Batch
- *
- * - website alanı boş olan lead'ler için
- * - makul domain tahminleri üretir
- * - her domain için website intel çağırır (HTTP check)
- * - başarılı olan ilk domain'i lead.website alanına yazar
- */
-async function runDomainDiscoveryBatch({ limit = 10 } = {}) {
-  const db = await getCrmDb();
-
-  // Sadece website'i boş olan lead'ler
-  const rows = db
-    .prepare(
-      `
-      SELECT id, company_name, city, website
-      FROM potential_leads
-      WHERE (website IS NULL OR website = '')
-      ORDER BY id ASC
-      LIMIT ?
-    `
-    )
-    .all(limit);
-
-  if (!rows.length) {
-    return {
-      processedCount: 0,
-      updatedCount: 0,
-      items: [],
-      note: "Domain discovery bekleyen lead bulunamadı.",
-    };
-  }
-
-  const items = [];
-  let updatedCount = 0;
-
-  for (const row of rows) {
-    const guesses = generateDomainGuessesForLead(row);
-
-    if (!guesses.length) {
-      log.info("[DomainDiscovery] Domain üretilemedi", {
-        leadId: row.id,
-        companyName: row.company_name,
-      });
-
-      items.push({
-        leadId: row.id,
-        companyName: row.company_name,
-        status: "no_guess",
-        chosenDomain: null,
-        tries: [],
-      });
-
-      continue;
+  for (const w of words) {
+    if (!brand && !STOP_ROOTS.includes(w)) {
+      brand = w;
+    } else {
+      rest.push(w);
     }
+  }
 
-    log.info("[DomainDiscovery] Domain adayları", {
-      leadId: row.id,
-      companyName: row.company_name,
-      guesses,
+  // Eğer tüm kelimeler generic ise, ilk kelimeyi brand kabul et (yine de bir şey denesin)
+  if (!brand) {
+    brand = words[0];
+    rest = words.slice(1);
+  }
+
+  // Extra kelimeleri max 3 ile sınırla
+  const extras = rest.slice(0, 3);
+
+  const pushRoot = (val) => {
+    if (!val) return;
+    const trimmed = val.slice(0, 15); // max 15 karakter
+    if (!trimmed) return;
+    if (!roots.includes(trimmed)) roots.push(trimmed);
+  };
+
+  // 1) Sadece brand
+  pushRoot(brand);
+
+  // 2) brand + 1. kelime
+  if (extras.length >= 1) {
+    pushRoot(brand + extras[0]);
+  }
+
+  // 3) brand + 1. + 2. kelime (max 3 kelime)
+  if (extras.length >= 2) {
+    pushRoot(brand + extras[0] + extras[1]);
+  }
+
+  // 4) (opsiyonel) brand + 2. kelime (arcves + gayrimenkul gibi)
+  if (extras.length >= 2) {
+    pushRoot(brand + extras[1]);
+  }
+
+  return roots.slice(0, 5);
+}
+
+/**
+ * Tek bir lead için domain keşfi:
+ *  - website boşsa
+ *  - aday domain rootları üret
+ *  - .com, .com.tr, .net kombinasyonlarını dene
+ *  - ilk çalışan domaini seç
+ */
+async function discoverDomainForLead(lead) {
+  const tries = [];
+
+  const { id, company_name } = lead;
+
+  const domainRoots = buildDomainRootCandidates(company_name);
+
+  if (!domainRoots.length) {
+    log.warn("[DomainDiscovery] Root üretilemedi", {
+      leadId: id,
+      companyName: company_name,
     });
+    return { ok: false, chosenDomain: null, tries };
+  }
 
-    let chosenDomain = null;
-    const tries = [];
+  const tlds = [".com", ".com.tr", ".net"];
 
-    for (const domain of guesses) {
+  for (const root of domainRoots) {
+    for (const tld of tlds) {
+      const domain = `${root}${tld}`;
       const url = `https://${domain}`;
 
       try {
-        const intel = await websiteIntelService.enrichWebsiteFromUrl({ url });
-
-        const httpStatus = intel && intel.httpStatus ? intel.httpStatus : null;
-        const ok =
-          httpStatus && Number(httpStatus) >= 200 && Number(httpStatus) < 400;
+        const intel = await enrichWebsiteFromUrl({
+          url,
+          leadId: id,
+        });
 
         tries.push({
           domain,
-          url,
-          httpStatus,
-          ok,
+          url: intel.url,
+          httpStatus: intel.httpStatus,
+          ok:
+            typeof intel.httpStatus === "number" &&
+            intel.httpStatus >= 200 &&
+            intel.httpStatus < 400,
         });
 
-        if (ok) {
-          // Bu domain'i lead.website alanına yaz
-          db.prepare(
-            `
-            UPDATE potential_leads
-            SET website = ?, updated_at = datetime('now')
-            WHERE id = ?
-          `
-          ).run(url, row.id);
-
-          chosenDomain = domain;
-          updatedCount++;
-
-          log.info("[DomainDiscovery] Domain bulundu ve kaydedildi", {
-            leadId: row.id,
+        // sadece 2xx–3xx arası cevap verenleri kabul ediyoruz
+        if (
+          typeof intel.httpStatus === "number" &&
+          intel.httpStatus >= 200 &&
+          intel.httpStatus < 400
+        ) {
+          log.info("[DomainDiscovery] Uygun domain bulundu", {
+            leadId: id,
+            companyName: company_name,
             domain,
-            url,
+            httpStatus: intel.httpStatus,
           });
 
-          break; // İlk başarılı domain'i alınca dur
+          return { ok: true, chosenDomain: domain, tries };
         }
       } catch (err) {
-        log.warn("[DomainDiscovery] Domain check hatası", {
-          leadId: row.id,
-          domain,
-          error: err.message,
-        });
-
         tries.push({
           domain,
           url,
@@ -264,27 +204,100 @@ async function runDomainDiscoveryBatch({ limit = 10 } = {}) {
           ok: false,
           error: err.message,
         });
+
+        log.warn("[DomainDiscovery] Domain denemesi hata", {
+          leadId: id,
+          companyName: company_name,
+          domain,
+          error: err.message,
+        });
       }
     }
-
-    if (!chosenDomain) {
-      log.info("[DomainDiscovery] Uygun domain bulunamadı", {
-        leadId: row.id,
-        companyName: row.company_name,
-      });
-    }
-
-    items.push({
-      leadId: row.id,
-      companyName: row.company_name,
-      status: chosenDomain ? "updated" : "not_found",
-      chosenDomain,
-      tries,
-    });
   }
 
+  log.info("[DomainDiscovery] Uygun domain bulunamadı", {
+    leadId: id,
+    companyName: company_name,
+  });
+
+  return { ok: false, chosenDomain: null, tries };
+}
+
+/**
+ * Batch domain discovery:
+ *  - website alanı boş olan lead'leri seç
+ *  - her biri için discoverDomainForLead çalıştır
+ *  - çalışan domain bulunduysa potential_leads.website alanını güncelle
+ */
+async function runDomainDiscoveryBatch({ limit = 20 } = {}) {
+  const db = await getCrmDb();
+
+  const leads = db
+    .prepare(
+      `
+      SELECT id, company_name, website, address, city
+      FROM potential_leads
+      WHERE (website IS NULL OR website = '')
+      ORDER BY id ASC
+      LIMIT ?
+    `,
+    )
+    .all(limit);
+
+  if (!leads.length) {
+    return {
+      processedCount: 0,
+      updatedCount: 0,
+      items: [],
+      note: "Website alanı boş olan lead bulunamadı.",
+    };
+  }
+
+  const items = [];
+  let updatedCount = 0;
+
+  for (const lead of leads) {
+    const result = await discoverDomainForLead(lead);
+
+    if (result.ok && result.chosenDomain) {
+      const fullUrl = `https://${result.chosenDomain}`;
+
+      // potential_leads.website alanını güncelle
+      db.prepare(
+        `
+        UPDATE potential_leads
+        SET website = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `,
+      ).run(fullUrl, lead.id);
+
+      items.push({
+        leadId: lead.id,
+        companyName: lead.company_name,
+        status: "updated",
+        chosenDomain: result.chosenDomain,
+        tries: result.tries,
+      });
+
+      updatedCount++;
+    } else {
+      items.push({
+        leadId: lead.id,
+        companyName: lead.company_name,
+        status: "not_found",
+        chosenDomain: null,
+        tries: result.tries,
+      });
+    }
+  }
+
+  log.info("[DomainDiscovery] Batch tamamlandı", {
+    processedCount: leads.length,
+    updatedCount,
+  });
+
   return {
-    processedCount: rows.length,
+    processedCount: leads.length,
     updatedCount,
     items,
   };
@@ -292,6 +305,4 @@ async function runDomainDiscoveryBatch({ limit = 10 } = {}) {
 
 module.exports = {
   runDomainDiscoveryBatch,
-  generateDomainGuessesForLead,
-  buildDomainBaseFromCompanyName,
 };

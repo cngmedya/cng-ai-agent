@@ -2,9 +2,14 @@
 
 const express = require("express");
 const router = express.Router();
-const workerController = require("../controllers/workerController");
 
-// Manuel worker tetikleme
-router.post("/run", workerController.runNow);
+// API key middleware
+const { apiKeyAuth } = require("../middleware/apiKeyAuth");
+
+// Controller
+const { runWorkerOnce } = require("../controllers/workerController");
+
+// Tek seferlik worker çalıştırma (manual / cron tetik)
+router.post("/run-once", apiKeyAuth, runWorkerOnce);
 
 module.exports = router;

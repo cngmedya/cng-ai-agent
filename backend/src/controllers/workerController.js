@@ -1,31 +1,36 @@
 // backend/src/controllers/workerController.js
 
+const { runWorkerOnce } = require("../services/workerService");
 const { log } = require("../lib/logger");
-const workerService = require("../services/workerService");
 
 /**
- * Manuel worker tetikleme
- * POST /api/worker/run
+ * Tek seferlik worker run (manuel / cron tetik)
+ *  - context: "manual" | "cron" vs.
  */
-async function runNow(req, res) {
+exports.runWorkerOnce = async (req, res) => {
+  const context =
+    (req.body && req.body.context) ||
+    (req.query && req.query.context) ||
+    "manual";
+
   try {
-    // İleride limit vs. query'den alabiliriz, şimdilik default
-    const processed = await workerService.runWorkerOnce();
+    const result = await runWorkerOnce({ context });
 
     return res.json({
       ok: true,
-      processed,
+      data: result,
+      error: null,
     });
   } catch (err) {
-    log.error("[WorkerController] runNow hata:", err);
+    log.error("[WorkerController] runWorkerOnce HATA", {
+      error: err.message,
+      stack: err.stack,
+    });
+
     return res.status(500).json({
       ok: false,
-      error: "WORKER_RUN_FAILED",
-      detail: err.message,
+      data: null,
+      error: "runWorkerOnce sırasında bir hata oluştu.",
     });
   }
-}
-
-module.exports = {
-  runNow,
 };

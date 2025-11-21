@@ -9,13 +9,13 @@ const { apiKeyAuth } = require("../../../middleware/apiKeyAuth");
 // Controller fonksiyonları
 const {
   acquireFromGooglePlaces,
-  enrichWebsiteIntel,             // 🔹 TEKİL WEBSITE INTEL
   runWebsiteIntelBatchForLeads,
   runReputationIntel,
   runReputationIntelBatchForLeads,
   getLeadIntelController,
   getLeadIntelSummaryController,
   runDomainDiscoveryBatchController,
+  enrichWebsiteIntel, // 🔹 TEK SEFER İMPORT
 } = require("../controllers/leadAcquisitionController");
 
 // -------------------------------
@@ -24,17 +24,13 @@ const {
 router.post("/acquire/google", apiKeyAuth, acquireFromGooglePlaces);
 
 // -------------------------------
-// WEBSITE INTEL (single + batch)
+// WEBSITE INTEL (single)
 // -------------------------------
+router.post("/intel/website", apiKeyAuth, enrichWebsiteIntel);
 
-// Tek bir URL için website intel
-router.post(
-  "/website-intel",
-  apiKeyAuth,
-  enrichWebsiteIntel
-);
-
-// Batch çalıştırma (lead'ler üzerinden)
+// -------------------------------
+// WEBSITE INTEL BATCH
+// -------------------------------
 router.post(
   "/intel/website/batch",
   apiKeyAuth,
@@ -44,11 +40,7 @@ router.post(
 // -------------------------------
 // REPUTATION INTEL (single + batch)
 // -------------------------------
-router.post(
-  "/intel/reputation",
-  apiKeyAuth,
-  runReputationIntel
-);
+router.post("/intel/reputation", apiKeyAuth, runReputationIntel);
 
 router.post(
   "/intel/reputation/batch",
@@ -59,20 +51,12 @@ router.post(
 // -------------------------------
 // LEAD INTEL (dashboard için)
 // -------------------------------
-router.get(
-  "/intel/summary",
-  apiKeyAuth,
-  getLeadIntelSummaryController
-);
+router.get("/intel/summary", apiKeyAuth, getLeadIntelSummaryController);
 
-router.get(
-  "/intel/:leadId",
-  apiKeyAuth,
-  getLeadIntelController
-);
+router.get("/intel/:leadId", apiKeyAuth, getLeadIntelController);
 
 // -------------------------------
-// DOMAIN DISCOVERY V2 (batch)
+// DOMAIN DISCOVERY BATCH
 // -------------------------------
 router.post(
   "/domain-discovery/batch",
