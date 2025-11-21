@@ -12,6 +12,8 @@ const {
   runWebsiteIntelBatchForLeads,
   runReputationIntel,
   runReputationIntelBatchForLeads,
+  getLeadIntelController,
+  getLeadIntelSummaryController,
 } = require("../controllers/leadAcquisitionController");
 
 // -------------------------------
@@ -41,6 +43,21 @@ router.post(
   "/intel/reputation/batch",
   apiKeyAuth,
   runReputationIntelBatchForLeads
+);
+
+// -------------------------------
+// LEAD INTEL (dashboard için)
+// -------------------------------
+router.get(
+  "/intel/summary",
+  apiKeyAuth,
+  getLeadIntelSummaryController
+);
+
+router.get(
+  "/intel/:leadId",
+  apiKeyAuth,
+  getLeadIntelController
 );
 
 module.exports = router;

@@ -109,6 +109,7 @@ async function initLeadAcquisitionSchema() {
   // 2) MIGRATION PATCH: Eski tabloları yeni kolonlara uyumlu hale getir
   // (ALTER TABLE ile ekliyoruz; varsa hata verir, try/catch ile yutuyoruz)
 
+  // website_intel için kolonlar
   try {
     db.exec(`ALTER TABLE website_intel ADD COLUMN lead_id INTEGER;`);
   } catch (_) {}
@@ -118,14 +119,19 @@ async function initLeadAcquisitionSchema() {
   } catch (_) {}
 
   try {
+    db.exec(`ALTER TABLE website_intel ADD COLUMN last_checked_at TEXT;`);
+  } catch (_) {}
+
+  try {
     db.exec(`ALTER TABLE website_intel ADD COLUMN error_message TEXT;`);
   } catch (_) {}
 
-  // lead_search_intel eski versiyonda yoktu büyük ihtimalle ama yine de koruyalım
+  // lead_search_intel için hata kolonu
   try {
     db.exec(`ALTER TABLE lead_search_intel ADD COLUMN error_message TEXT;`);
   } catch (_) {}
 
+  // reputation için suggested_actions_json kolonu (eski DB'lerde olmayabilir)
   try {
     db.exec(
       `ALTER TABLE lead_reputation_insights ADD COLUMN suggested_actions_json TEXT;`

@@ -6,6 +6,10 @@ const leadAcquisitionService = require("../services/leadAcquisitionService");
 const websiteIntelService = require("../services/websiteIntelService");
 const websiteAiAnalysisService = require("../services/websiteAiAnalysisService");
 const { runWebsiteIntelBatch } = require("../services/leadBatchWebsiteIntelService");
+const {
+  getLeadIntel,
+  getLeadIntelSummary,
+} = require("../services/leadIntelService");
 
 exports.acquireFromGooglePlaces = async (req, res) => {
   try {
@@ -213,4 +217,31 @@ exports.runReputationIntelBatchForLeads = async (req, res) => {
       .status(500)
       .json({ ok: false, error: "Reputation batch hata verdi." });
   }
+};
+
+/**
+ * Tek bir lead için full intel (lead + website + search + reputation)
+ */
+exports.getLeadIntelController = async (req, res) => {
+  const leadId = parseInt(req.params.leadId || req.params.id, 10);
+
+  if (!leadId || Number.isNaN(leadId)) {
+    return res.status(400).json({ ok: false, error: "Geçerli leadId gerekli." });
+  }
+
+  const intel = await getLeadIntel(leadId);
+
+  if (!intel) {
+    return res.status(404).json({ ok: false, error: "Lead bulunamadı." });
+  }
+
+  return res.json({ ok: true, intel });
+};
+
+/**
+ * Intel summary (dashboard sayıları)
+ */
+exports.getLeadIntelSummaryController = async (req, res) => {
+  const summary = await getLeadIntelSummary();
+  return res.json({ ok: true, summary });
 };
