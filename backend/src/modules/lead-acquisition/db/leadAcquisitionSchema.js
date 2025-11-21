@@ -33,6 +33,20 @@ async function initLeadAcquisitionSchema() {
     );
   `);
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS website_intel (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      url TEXT,
+      http_status INTEGER,
+      title TEXT,
+      description TEXT,
+      meta_json TEXT,
+      error TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+  `);
+  
   // logger'ın doğru kullanımı: log.info(...)
   log.info("[LeadAcq] lead_sources ve potential_leads tabloları hazır.");
 }

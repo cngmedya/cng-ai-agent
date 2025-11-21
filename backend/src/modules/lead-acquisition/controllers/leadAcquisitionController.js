@@ -2,6 +2,7 @@
 
 const { log } = require("../../../lib/logger");
 const leadAcquisitionService = require("../services/leadAcquisitionService");
+const websiteIntelService = require("../services/websiteIntelService");
 
 exports.acquireFromGooglePlaces = async (req, res) => {
   try {
@@ -42,6 +43,36 @@ exports.acquireFromGooglePlaces = async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Google Places taraması sırasında bir hata oluştu.",
+    });
+  }
+};
+
+exports.enrichWebsiteIntel = async (req, res) => {
+  try {
+    const { url } = req.body || {};
+
+    if (!url) {
+      return res.status(400).json({
+        ok: false,
+        error: "url alanı zorunludur.",
+      });
+    }
+
+    const intel = await websiteIntelService.enrichWebsiteFromUrl({ url });
+
+    return res.json({
+      ok: true,
+      intel,
+    });
+  } catch (err) {
+    log.error("[WebIntel] Website intel hatası", {
+      error: err.message,
+      stack: err.stack,
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: "Website intel sırasında bir hata oluştu.",
     });
   }
 };
