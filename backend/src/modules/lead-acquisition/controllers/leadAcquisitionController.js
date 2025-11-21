@@ -4,6 +4,7 @@ const { log } = require("../../../lib/logger");
 const leadAcquisitionService = require("../services/leadAcquisitionService");
 const websiteIntelService = require("../services/websiteIntelService");
 const websiteAiAnalysisService = require("../services/websiteAiAnalysisService");
+const { runWebsiteIntelBatch } = require("../services/leadBatchWebsiteIntelService");
 
 exports.acquireFromGooglePlaces = async (req, res) => {
   try {
@@ -111,6 +112,27 @@ exports.analyzeWebsiteWithAI = async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Website AI analizi sırasında bir hata oluştu.",
+    });
+  }
+};
+
+exports.runWebsiteIntelBatchForLeads = async (req, res) => {
+  try {
+    const { limit } = req.body || {};
+    const result = await runWebsiteIntelBatch({
+      limit: limit || 5,
+    });
+
+    return res.json(result);
+  } catch (err) {
+    log.error("[WebIntelBatch] Batch çalıştırma hatası", {
+      error: err.message,
+      stack: err.stack,
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: "Website batch intel sırasında bir hata oluştu.",
     });
   }
 };

@@ -12,4 +12,7 @@ router.post("/intel/website", leadAcquisitionController.enrichWebsiteIntel);
 // Website intelligence + AI SWOT + dijital skor analizi
 router.post("/intel/website/ai", leadAcquisitionController.analyzeWebsiteWithAI);
 
+// potential_leads için otomatik website taraması (domain tahmin + intel)
+router.post("/intel/website/batch", leadAcquisitionController.runWebsiteIntelBatchForLeads);
+
 module.exports = router;
