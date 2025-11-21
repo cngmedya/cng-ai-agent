@@ -2,67 +2,74 @@
 
 const { log } = require("../../../lib/logger");
 const { getCrmDb } = require("../../../db/db");
-
-// 🔹 V2 – Hem Text Search hem Place Details kullanıyoruz
+// 🔹 Burayı düzelttik: searchPlacesWithText yerine mevcut fonksiyon
 const { searchPlacesWithTextAndDetails } = require("./googlePlacesService");
-
-// 🔹 Lead normalizasyon helper
 const { normalizePlaceToLead } = require("../utils/normalizeLead");
 
-// SQL string içinde güvenli şekilde kullanmak için
+// SQL string içinde güvenli şekilde kullanmak için basit escape helper
 function sqlValue(value) {
-  if (value === null || value === undefined) return "NULL";
+  if (value === null || value === undefined) {
+    return "NULL";
+  }
   const str = String(value);
+  // Tek tırnakları SQLite uyumlu hale getirelim
   const escaped = str.replace(/'/g, "''");
   return `'${escaped}'`;
 }
 
 /**
- * Google Places → Text Search + Place Details kombinasyonu ile lead toplama
- * Çoğu işletmede website, telefon ve adres bilgisi direkt Place Details'ten gelir.
+ * Google Places üzerinden lead toplama servisi
+ *
+ * Input:
+ *  - location: "İstanbul" gibi şehir / bölge
+ *  - keyword: "mimarlık ofisi" gibi arama terimi
+ *  - radius: metre cinsinden yarıçap (opsiyonel, default 8000)
+ *
+ * Output:
+ *  {
+ *    sourceId: null (V1'de kullanılmıyor),
+ *    foundCount: Google Places'ten gelen toplam sonuç sayısı,
+ *    insertedCount: potential_leads tablosuna eklenen yeni kayıt sayısı,
+ *    duplicateCount: aynı batch içinde tekrarlayan firma/adres kombinasyonları
+ *  }
  */
 async function acquireFromGooglePlaces({ location, keyword, radius }) {
-  // 1) Google Places (Text Search + Place Details) → tam veri çek
+  const radiusValue = radius || 8000;
+
+  // 1) Google Places sonuçlarını çek
+  // 🔹 Burayı da düzelttik: searchPlacesWithTextAndDetails kullanıyoruz
   const { places, raw } = await searchPlacesWithTextAndDetails({
     location,
     keyword,
-    radius,
+    radius: radiusValue,
   });
 
-  log.info("[LeadAcq] Google Places sonuç sayısı (details ile)", {
+  log.info("[LeadAcq] Google Places sonuç sayısı", {
     count: places.length,
   });
 
   const db = await getCrmDb();
 
-  // 2) SQL batch hazırlığı
+  // 2) SQL batch string hazırlayalım
   let sqlBatch = "BEGIN;\n";
 
+  // lead_sources kaydı
   const queryLabel = `${keyword} @ ${location}`;
-  const rawPayload = JSON.stringify(raw);
+  const rawJson = JSON.stringify(raw);
 
   sqlBatch += `
-    INSERT INTO lead_sources (
-      query,
-      source_type,
-      raw_payload_json,
-      created_at
-    )
-    VALUES (
-      ${sqlValue(queryLabel)},
-      'google_places',
-      ${sqlValue(rawPayload)},
-      datetime('now')
-    );
+    INSERT INTO lead_sources (query, source_type, raw_payload_json, created_at)
+    VALUES (${sqlValue(queryLabel)}, 'google_places', ${sqlValue(
+      rawJson
+    )}, datetime('now'));
   `;
 
   let inserted = 0;
   let duplicates = 0;
 
-  // Aynı batch içinde duplicate engelleme
+  // Aynı batch içindeki duplicate'leri engellemek için (company_name + city)
   const seenKeys = new Set();
 
-  // 3) Her place → normalize → potential_leads içine yaz
   for (const place of places) {
     const lead = normalizePlaceToLead(place, {
       keyword,
@@ -70,9 +77,11 @@ async function acquireFromGooglePlaces({ location, keyword, radius }) {
       location,
     });
 
-    if (!lead.company_name) continue;
+    if (!lead.company_name) {
+      // Firma ismi yoksa bu kaydı es geç
+      continue;
+    }
 
-    // duplicate check (V2)
     const key = `${lead.company_name}||${lead.city || ""}`;
     if (seenKeys.has(key)) {
       duplicates++;
@@ -98,7 +107,7 @@ async function acquireFromGooglePlaces({ location, keyword, radius }) {
       VALUES (
         ${sqlValue(lead.company_name)},
         ${sqlValue(lead.category)},
-        ${sqlValue(lead.website)},      -- 🔥 Place Details varsa gerçek website burada!
+        ${sqlValue(lead.website)},
         ${sqlValue(lead.phone)},
         ${sqlValue(lead.address)},
         ${sqlValue(lead.city)},
@@ -113,7 +122,7 @@ async function acquireFromGooglePlaces({ location, keyword, radius }) {
 
   sqlBatch += "\nCOMMIT;";
 
-  // 4) Tek seferlik batch insert
+  // 3) Tek seferde tüm batch'i çalıştır
   await db.exec(sqlBatch);
 
   log.info("[LeadAcq] Google Places taraması tamamlandı", {
@@ -122,7 +131,7 @@ async function acquireFromGooglePlaces({ location, keyword, radius }) {
   });
 
   return {
-    ok: true,
+    sourceId: null, // V1: last_insert_rowid kullanmıyoruz, gerekirse V2'de ekleriz
     foundCount: places.length,
     insertedCount: inserted,
     duplicateCount: duplicates,

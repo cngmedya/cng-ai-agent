@@ -2,131 +2,115 @@
 
 const axios = require("axios");
 const { log } = require("../../../lib/logger");
+const { config } = require("../../../config/env");
 
+// ENV → Google Places API Key
 const GOOGLE_PLACES_API_KEY =
-  process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_API_KEY || "";
-
-const PLACES_BASE_URL = "https://maps.googleapis.com/maps/api/place";
+  process.env.GOOGLE_PLACES_API_KEY || config.googlePlacesApiKey;
 
 /**
- * Basit Text Search
- */
-async function textSearch({ query }) {
-  if (!GOOGLE_PLACES_API_KEY) {
-    throw new Error("GOOGLE_PLACES_API_KEY tanımlı değil.");
-  }
-
-  const url = `${PLACES_BASE_URL}/textsearch/json`;
-
-  const resp = await axios.get(url, {
-    params: {
-      key: GOOGLE_PLACES_API_KEY,
-      query,
-    },
-    timeout: 10000,
-  });
-
-  if (resp.data.status !== "OK" && resp.data.status !== "ZERO_RESULTS") {
-    log.warn("[GooglePlaces] Text search status", resp.data);
-  }
-
-  const results = resp.data.results || [];
-  return { results, raw: resp.data };
-}
-
-/**
- * Place Details: website, telefon vs. çekmek için
- */
-async function getPlaceDetails(placeId) {
-  if (!GOOGLE_PLACES_API_KEY) {
-    throw new Error("GOOGLE_PLACES_API_KEY tanımlı değil.");
-  }
-
-  const url = `${PLACES_BASE_URL}/details/json`;
-
-  const resp = await axios.get(url, {
-    params: {
-      key: GOOGLE_PLACES_API_KEY,
-      place_id: placeId,
-      fields:
-        "name,formatted_address,geometry,website,formatted_phone_number,international_phone_number,types,url,business_status",
-    },
-    timeout: 10000,
-  });
-
-  if (resp.data.status !== "OK") {
-    log.warn("[GooglePlaces] Place details status", {
-      placeId,
-      status: resp.data.status,
-    });
-  }
-
-  return resp.data.result || {};
-}
-
-/**
- * Text Search + Place Details kombinasyonu.
- * place.website varsa → doğrudan lead kaydında kullanacağız.
+ * Google Places Text Search + (opsiyonel) Details
+ *
+ * Input:
+ *  - location: "İstanbul"
+ *  - keyword: "mimarlık ofisi"
+ *  - radius: metre (örn: 8000)
+ *
+ * Output:
+ *  {
+ *    places: [ ...detaylı place objeleri... ],
+ *    raw: text search'in ham JSON cevabı
+ *  }
  */
 async function searchPlacesWithTextAndDetails({ location, keyword, radius }) {
-  const query =
-    keyword && location ? `${keyword} ${location}` : keyword || location;
+  if (!GOOGLE_PLACES_API_KEY) {
+    throw new Error("Google Places API anahtarı tanımlı değil.");
+  }
+
+  const radiusValue = radius || 8000;
+  const query = `${keyword} ${location}`.trim();
 
   log.info("[LeadAcq] Google Places text search çağrısı", {
     query,
-    radius,
+    radius: radiusValue,
   });
 
-  const { results, raw } = await textSearch({ query });
+  const textSearchUrl =
+    "https://maps.googleapis.com/maps/api/place/textsearch/json";
 
-  const places = [];
+  // 1) Text Search çağrısı
+  const textResp = await axios.get(textSearchUrl, {
+    params: {
+      query,
+      radius: radiusValue,
+      key: GOOGLE_PLACES_API_KEY,
+      language: "tr",
+    },
+  });
 
-  for (const r of results) {
-    const placeId = r.place_id;
-    let details = {};
+  const textData = textResp.data || {};
+  const basePlaces = textData.results || [];
 
-    try {
-      details = await getPlaceDetails(placeId);
-    } catch (err) {
-      log.warn("[GooglePlaces] Place details hatası", {
-        placeId,
-        error: err?.message || String(err),
-      });
+  // 2) Detay log
+  log.info("[LeadAcq] Google Places sonuç sayısı (details ile)", {
+    count: basePlaces.length,
+  });
+
+  // 3) Details çağrıları
+  const detailsUrl =
+    "https://maps.googleapis.com/maps/api/place/details/json";
+
+  const placesWithDetails = [];
+
+  for (const place of basePlaces) {
+    // place_id yoksa direk ekle
+    if (!place.place_id) {
+      placesWithDetails.push(place);
+      continue;
     }
 
-    const website =
-      details.website && typeof details.website === "string"
-        ? details.website
-        : null;
+    try {
+      const detailsResp = await axios.get(detailsUrl, {
+        params: {
+          place_id: place.place_id,
+          key: GOOGLE_PLACES_API_KEY,
+          language: "tr",
+          // V1 için temel bilgiler yeterli:
+          fields:
+            "website,formatted_phone_number,international_phone_number",
+        },
+      });
 
-    const phone =
-      details.formatted_phone_number ||
-      details.international_phone_number ||
-      null;
+      const details = (detailsResp.data && detailsResp.data.result) || {};
 
-    places.push({
-      place_id: placeId,
-      name: details.name || r.name,
-      formatted_address: details.formatted_address || r.formatted_address,
-      location:
-        (details.geometry && details.geometry.location) ||
-        (r.geometry && r.geometry.location) ||
-        null,
-      website,
-      phone,
-      types: details.types || r.types || [],
-      raw: {
-        text: r,
-        details,
-      },
-    });
+      // Website + telefon gibi alanları ana place objesinin üstüne merge ediyoruz
+      const merged = {
+        ...place,
+        website: details.website || place.website || null,
+        phone:
+          details.international_phone_number ||
+          details.formatted_phone_number ||
+          place.formatted_phone_number ||
+          null,
+        _details: details, // İstersek normalize sırasında kullanırız
+      };
+
+      placesWithDetails.push(merged);
+    } catch (err) {
+      log.warn("[LeadAcq] Google Places details çağrısı hatası", {
+        placeId: place.place_id,
+        error: err.message,
+      });
+
+      // Hata olsa bile en azından text search sonucunu koruyalım
+      placesWithDetails.push(place);
+    }
   }
 
-  log.info("[LeadAcq] Google Places sonuç sayısı (details ile)", {
-    count: places.length,
-  });
-
-  return { places, raw };
+  return {
+    places: placesWithDetails,
+    raw: textData,
+  };
 }
 
 module.exports = {
