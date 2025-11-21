@@ -4,6 +4,9 @@ const express = require("express");
 const cors = require("cors");
 const { config } = require("./config/env");
 const { log } = require("./lib/logger");
+const { initLeadAcquisitionSchema } = require("./modules/lead-acquisition/db/leadAcquisitionSchema");
+const leadAcquisitionRoutes = require("./modules/lead-acquisition/routes/leadAcquisitionRoutes");
+
 
 // Routes
 const aiRoutes = require("./routes/aiRoutes");
@@ -27,6 +30,9 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+
+app.use("/api/leads", leadAcquisitionRoutes);
 
 // Basit root health check (korumasız)
 app.get("/", (req, res) => {
