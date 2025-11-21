@@ -12,6 +12,7 @@ const {
   getLeadIntelSummary,
 } = require("../services/leadIntelService");
 const { runReputationIntelForLead } = require("../services/leadReputationOrchestrator");
+const { runDomainDiscoveryBatch } = require("../services/leadDomainDiscoveryService");
 
 /**
  * Google Places üzerinden lead toplama
@@ -280,6 +281,33 @@ exports.runReputationIntelBatchForLeads = async (req, res) => {
       ok: false,
       data: null,
       error: "Reputation batch hata verdi.",
+    });
+  }
+};
+
+/**
+ * Domain Discovery V2 – website'i boş olan lead'ler için domain bulma
+ */
+exports.runDomainDiscoveryBatchController = async (req, res) => {
+  try {
+    const { limit = 10 } = req.body || {};
+    const result = await runDomainDiscoveryBatch({ limit });
+
+    return res.json({
+      ok: true,
+      data: result,
+      error: null,
+    });
+  } catch (err) {
+    log.error("[DomainDiscovery] Batch HATA", {
+      error: err.message,
+      stack: err.stack,
+    });
+
+    return res.status(500).json({
+      ok: false,
+      data: null,
+      error: "Domain discovery batch çalışırken bir hata oluştu.",
     });
   }
 };

@@ -1,121 +1,212 @@
 // backend/src/modules/lead-acquisition/services/websiteIntelService.js
 
 const axios = require("axios");
-const { log } = require("../../../lib/logger");
 const { getCrmDb } = require("../../../db/db");
+const { log } = require("../../../lib/logger");
 
-// SQL injection'a karşı basit escape helper
-function sqlValue(value) {
-  if (value === null || value === undefined) {
-    return "NULL";
+/**
+ * Basit HTML içinden <title> çek
+ */
+function extractTitle(html) {
+  if (!html) return null;
+  const match = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+  if (match && match[1]) {
+    return match[1].trim();
   }
-  const str = String(value);
-  const escaped = str.replace(/'/g, "''");
-  return `'${escaped}'`;
+  return null;
 }
 
-// HTML içinden basit title + description çıkartma
-function parseHtmlMeta(html) {
-  if (!html || typeof html !== "string") {
-    return { title: null, description: null, meta: {} };
+/**
+ * Basit HTML içinden meta description çek
+ */
+function extractMetaDescription(html) {
+  if (!html) return null;
+
+  const metaRegex =
+    /<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>/i;
+
+  const match = html.match(metaRegex);
+  if (match && match[1]) {
+    return match[1].trim();
   }
+  return null;
+}
 
-  let title = null;
-  let description = null;
+/**
+ * Çok basit bir "tech / CMS" tespiti
+ */
+function detectTech(html) {
+  if (!html) return null;
+  const lower = html.toLowerCase();
 
-  const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-  if (titleMatch && titleMatch[1]) {
-    title = titleMatch[1].trim();
-  }
-
-  const descMatch = html.match(
-    /<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>/i
-  );
-  if (descMatch && descMatch[1]) {
-    description = descMatch[1].trim();
-  }
-
-  const meta = {
-    title,
-    description,
+  const tech = {
+    isWordPress: lower.includes("wp-content") || lower.includes("wordpress"),
+    isShopify: lower.includes("cdn.shopify.com") || lower.includes("shopify"),
+    isWix: lower.includes("wixstatic.com") || lower.includes("wix.com"),
+    isWebflow: lower.includes("webflow.io") || lower.includes("webflow.com"),
+    isSquarespace: lower.includes("squarespace.com"),
   };
 
-  return { title, description, meta };
+  return tech;
 }
 
-async function enrichWebsiteFromUrl({ url }) {
-  if (!url) {
+/**
+ * Website kalite skoruna zemin hazırlayan basit bir değerlendirme
+ */
+function buildWebsiteScore({ httpStatus, title, description, html }) {
+  let score = 0;
+
+  if (httpStatus && httpStatus >= 200 && httpStatus < 400) {
+    score += 40;
+  }
+
+  if (title && title.length >= 3) {
+    score += 20;
+  }
+
+  if (description && description.length >= 20) {
+    score += 20;
+  }
+
+  if (html && html.length > 5000) {
+    // Biraz içerik doluluğu
+    score += 20;
+  }
+
+  if (score > 100) score = 100;
+
+  return score;
+}
+
+/**
+ * URL normalize:
+ * - boşsa null
+ * - protokol yoksa https:// ekle
+ */
+function normalizeUrl(url) {
+  if (!url) return null;
+  let u = String(url).trim();
+  if (!u) return null;
+
+  if (!u.startsWith("http://") && !u.startsWith("https://")) {
+    u = "https://" + u;
+  }
+
+  return u;
+}
+
+/**
+ * Website Intel V2
+ *
+ * Input:
+ *  - url (zorunlu)
+ *  - leadId (opsiyonel)
+ *
+ * Davranış:
+ *  - URL'ye HTTP isteği atar
+ *  - Durum kodunu alır
+ *  - HTML'den title + meta description çeker
+ *  - Basit tech / CMS bilgisi çıkarır
+ *  - website_intel tablosuna kayıt yazar
+ *  - Sonuç objesini geri döner
+ */
+async function enrichWebsiteFromUrl({ url, leadId = null }) {
+  const finalUrl = normalizeUrl(url);
+
+  if (!finalUrl) {
     throw new Error("URL zorunludur.");
   }
 
-  log.info("[WebIntel] Website analiz başlıyor", { url });
+  log.info("[WebIntel] Website analiz başlıyor", { url: finalUrl });
+
+  const db = await getCrmDb();
 
   let httpStatus = null;
-  let html = null;
+  let title = null;
+  let description = null;
+  let metaJson = null;
   let errorMessage = null;
+  let html = null;
 
   try {
-    const response = await axios.get(url, {
+    const resp = await axios.get(finalUrl, {
       timeout: 10000,
       maxRedirects: 5,
-      // headers: { "User-Agent": "CNG-Medya-AI-Agent/1.0" } // istersen ekleyebiliriz
+      // Her HTTP kodunda hata fırlatma yerine status'u kendimiz yorumlayalım
+      validateStatus: () => true,
     });
-    httpStatus = response.status;
-    html = response.data;
+
+    httpStatus = resp.status;
+    html = typeof resp.data === "string" ? resp.data : null;
+
+    title = extractTitle(html);
+    description = extractMetaDescription(html);
+    const tech = detectTech(html);
+
+    const score = buildWebsiteScore({
+      httpStatus,
+      title,
+      description,
+      html,
+    });
+
+    metaJson = {
+      tech,
+      score,
+      hasTitle: !!title,
+      hasDescription: !!description,
+      contentLength: html ? html.length : 0,
+      fetchedAt: new Date().toISOString(),
+    };
   } catch (err) {
-    httpStatus = err.response ? err.response.status : null;
     errorMessage = err.message;
     log.warn("[WebIntel] Website fetch hatası", {
-      url,
+      url: finalUrl,
       httpStatus,
       error: err.message,
     });
   }
 
-  const { title, description, meta } = parseHtmlMeta(html || "");
+  // DB'ye yaz
+  const now = new Date().toISOString();
 
-  const db = await getCrmDb();
-  const now = "datetime('now')";
-
-  const metaJson = JSON.stringify(meta);
-  const errorText = errorMessage || null;
-
-  const sql = `
+  db.prepare(
+    `
     INSERT INTO website_intel (
+      lead_id,
       url,
       http_status,
       title,
       description,
       meta_json,
-      error,
-      created_at,
-      updated_at
-    ) VALUES (
-      ${sqlValue(url)},
-      ${httpStatus !== null ? httpStatus : "NULL"},
-      ${sqlValue(title)},
-      ${sqlValue(description)},
-      ${sqlValue(metaJson)},
-      ${sqlValue(errorText)},
-      ${now},
-      ${now}
-    );
-  `;
-
-  await db.exec(`BEGIN; ${sql} COMMIT;`);
+      last_checked_at,
+      error_message
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `
+  ).run(
+    leadId || null,
+    finalUrl,
+    httpStatus,
+    title,
+    description,
+    metaJson ? JSON.stringify(metaJson) : null,
+    now,
+    errorMessage
+  );
 
   log.info("[WebIntel] Website intel kaydedildi", {
-    url,
+    url: finalUrl,
     httpStatus,
   });
 
   return {
-    url,
+    url: finalUrl,
     httpStatus,
     title,
     description,
-    meta,
-    error: errorMessage || null,
+    meta: metaJson,
+    error: errorMessage,
   };
 }
 
