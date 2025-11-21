@@ -136,3 +136,16 @@ exports.runWebsiteIntelBatchForLeads = async (req, res) => {
     });
   }
 };
+
+const { runReputationIntelForLead } = require("../services/leadReputationOrchestrator");
+
+exports.runReputationIntel = async (req, res) => {
+  const { leadId } = req.body;
+
+  if (!leadId) {
+    return res.status(400).json({ ok: false, error: "leadId required" });
+  }
+
+  const result = await runReputationIntelForLead(leadId);
+  return res.json(result);
+};

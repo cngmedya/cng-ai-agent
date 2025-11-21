@@ -1,18 +1,40 @@
+// backend/src/modules/lead-acquisition/routes/leadAcquisitionRoutes.js
+
 const express = require("express");
 const router = express.Router();
 
-const leadAcquisitionController = require("../controllers/leadAcquisitionController");
+// middleware eklemeyi unutmayalım!
+const { apiKeyAuth } = require("../../../middleware/apiKeyAuth");
 
-// Google Places üzerinden potansiyel müşteri tarama
-router.post("/acquire/google", leadAcquisitionController.acquireFromGooglePlaces);
+const {
+  acquireFromGooglePlaces,
+  runWebsiteIntelBatchForLeads,
+} = require("../controllers/leadAcquisitionController");
 
-// Website intelligence: URL bazlı ham meta analiz
-router.post("/intel/website", leadAcquisitionController.enrichWebsiteIntel);
+// Yeni reputation controller
+const { runReputationIntel } = require("../controllers/leadAcquisitionController");
 
-// Website intelligence + AI SWOT + dijital skor analizi
-router.post("/intel/website/ai", leadAcquisitionController.analyzeWebsiteWithAI);
+// -------------------------------
+// GOOGLE PLACES -> LEAD ACQUISITION
+// -------------------------------
+router.post("/acquire/google", apiKeyAuth, acquireFromGooglePlaces);
 
-// potential_leads için otomatik website taraması (domain tahmin + intel)
-router.post("/intel/website/batch", leadAcquisitionController.runWebsiteIntelBatchForLeads);
+// -------------------------------
+// WEBSITE INTEL BATCH
+// -------------------------------
+router.post(
+  "/intel/website/batch",
+  apiKeyAuth,
+  runWebsiteIntelBatchForLeads
+);
+
+// -------------------------------
+// REPUTATION INTEL (AI + Search)
+// -------------------------------
+router.post(
+  "/intel/reputation",
+  apiKeyAuth,
+  runReputationIntel
+);
 
 module.exports = router;
