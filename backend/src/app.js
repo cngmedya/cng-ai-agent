@@ -4,9 +4,12 @@ const express = require("express");
 const cors = require("cors");
 const { config } = require("./config/env");
 const { log } = require("./lib/logger");
-const { initLeadAcquisitionSchema } = require("./modules/lead-acquisition/db/leadAcquisitionSchema");
-const leadAcquisitionRoutes = require("./modules/lead-acquisition/routes/leadAcquisitionRoutes");
 
+// Lead Acquisition V1
+const {
+  initLeadAcquisitionSchema,
+} = require("./modules/lead-acquisition/db/leadAcquisitionSchema");
+const leadAcquisitionRoutes = require("./modules/lead-acquisition/routes/leadAcquisitionRoutes");
 
 // Routes
 const aiRoutes = require("./routes/aiRoutes");
@@ -31,9 +34,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-
-app.use("/api/leads", leadAcquisitionRoutes);
-
 // Basit root health check (korumasız)
 app.get("/", (req, res) => {
   res.json({ ok: true, message: "CNG Medya AI Agent backend çalışıyor." });
@@ -49,6 +49,9 @@ app.use("/api/whatsapp", whatsappRoutes);
 // 🔐 API KEY ile korunan core endpointler
 app.use("/api/ai", apiKeyAuth, aiRoutes);
 app.use("/api/leads", apiKeyAuth, leadRoutes);
+// Lead Acquisition endpointleri de aynı namespace altında, API key ile korumalı
+// Örn: POST /api/leads/acquire/google
+app.use("/api/leads", apiKeyAuth, leadAcquisitionRoutes);
 app.use("/api/offers", apiKeyAuth, offerRoutes);
 app.use("/api/crm", apiKeyAuth, crmRoutes);
 app.use("/api/seo", apiKeyAuth, seoRoutes);
@@ -58,8 +61,27 @@ app.use("/api/campaigns", apiKeyAuth, campaignRoutes);
 app.use("/api/dashboard", apiKeyAuth, dashboardRoutes); // 🔹 YENİ
 app.use("/api/worker", apiKeyAuth, workerRoutes); // 🔹 YENİ
 
+// -------------------------------------------------------------
+// SERVER BOOTSTRAP
+// -------------------------------------------------------------
 
-// Server'ı başlat
-app.listen(config.port, () => {
-  log.info(`Server ${config.port} portunda çalışıyor (${config.env})`);
-});
+async function start() {
+  try {
+    // Lead Acquisition tablolarını hazırla
+    await initLeadAcquisitionSchema();
+
+    app.listen(config.port, () => {
+      log.info(`Server ${config.port} portunda çalışıyor (${config.env})`);
+    });
+  } catch (err) {
+    log.error("Sunucu başlatılırken hata oluştu", {
+      error: err.message,
+      stack: err.stack,
+    });
+    process.exit(1);
+  }
+}
+
+start();
+
+module.exports = app;

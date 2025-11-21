@@ -33,7 +33,8 @@ async function initLeadAcquisitionSchema() {
     );
   `);
 
-  log("INFO", "[LeadAcq] lead_sources ve potential_leads tabloları hazır.");
+  // logger'ın doğru kullanımı: log.info(...)
+  log.info("[LeadAcq] lead_sources ve potential_leads tabloları hazır.");
 }
 
 module.exports = {
