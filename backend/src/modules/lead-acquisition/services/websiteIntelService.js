@@ -1,88 +1,38 @@
 // backend/src/modules/lead-acquisition/services/websiteIntelService.js
 
 const axios = require("axios");
+const cheerio = require("cheerio");
 const { getCrmDb } = require("../../../db/db");
 const { log } = require("../../../lib/logger");
 
 /**
- * Basit HTML helper'lar
+ * URL normalize:
+ * - başında http/https yoksa https:// ekler
  */
-function extractTitle(html) {
-  if (!html) return null;
-  const match = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  return match ? match[1].trim() : null;
-}
-
-function extractMetaDescription(html) {
-  if (!html) return null;
-  const match = html.match(
-    /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["'][^>]*>/i
-  );
-  return match ? match[1].trim() : null;
-}
-
-function extractMetaRobots(html) {
-  if (!html) return null;
-  const match = html.match(
-    /<meta[^>]+name=["']robots["'][^>]+content=["']([^"']+)["'][^>]*>/i
-  );
-  return match ? match[1].trim().toLowerCase() : null;
-}
-
-function extractCanonical(html) {
-  if (!html) return null;
-  const match = html.match(
-    /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["'][^>]*>/i
-  );
-  return match ? match[1].trim() : null;
-}
-
-function countTag(html, tagName) {
-  if (!html) return 0;
-  const regex = new RegExp(`<${tagName}\\b[^>]*>`, "gi");
-  const matches = html.match(regex);
-  return matches ? matches.length : 0;
-}
-
-function hasOgTags(html) {
-  if (!html) return false;
-  return /<meta[^>]+property=["']og:/i.test(html);
-}
-
-function hasTwitterCard(html) {
-  if (!html) return false;
-  return /<meta[^>]+name=["']twitter:/i.test(html);
+function normalizeUrl(rawUrl) {
+  if (!rawUrl) return null;
+  let url = rawUrl.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    url = "https://" + url;
+  }
+  return url;
 }
 
 /**
- * Çok basit teknoloji tespiti
+ * Basit teknoloji tespiti
  */
-function detectTech(html) {
-  const text = (html || "").toLowerCase();
+function buildTechInsights(html = "") {
+  const lowered = html.toLowerCase();
 
   const isWordPress =
-    text.includes("wp-content") ||
-    text.includes("wp-includes") ||
-    /<meta[^>]+name=["']generator["'][^>]+wordpress/i.test(text);
-
-  const isShopify =
-    text.includes("cdn.shopify.com") ||
-    text.includes("myshopify.com") ||
-    /<meta[^>]+name=["']shopify/i.test(text);
-
-  const isWix =
-    text.includes("wix-static") ||
-    text.includes("wix.com") ||
-    /<meta[^>]+name=["']generator["'][^>]+wix/i.test(text);
-
-  const isWebflow =
-    text.includes("webflow.io") ||
-    text.includes("webflow.js") ||
-    /<meta[^>]+name=["']generator["'][^>]+webflow/i.test(text);
-
+    lowered.includes("wp-content") ||
+    lowered.includes("wp-includes") ||
+    lowered.includes("wordpress");
+  const isShopify = lowered.includes("cdn.shopify.com") || lowered.includes("x-shopify-stage");
+  const isWix = lowered.includes("wix.com") || lowered.includes("X-Wix-Request-Id".toLowerCase());
+  const isWebflow = lowered.includes("webflow") || lowered.includes("data-wf-page");
   const isSquarespace =
-    text.includes("squarespace.com") ||
-    /<meta[^>]+name=["']generator["'][^>]+squarespace/i.test(text);
+    lowered.includes("squarespace") || lowered.includes("static1.squarespace.com");
 
   return {
     isWordPress,
@@ -94,256 +44,215 @@ function detectTech(html) {
 }
 
 /**
- * SEO & yapı skorları
+ * SEO insight:
+ * - H1 / H2 sayıları
+ * - Canonical
+ * - Robots meta
+ * - OG / Twitter card
+ * - Basit SEO skoru
  */
-function computeSeoScore({
-  hasTitle,
-  hasDescription,
-  h1Count,
-  h2Count,
-  hasCanonical,
-  hasOg,
-  hasTwitter,
-  robots,
-}) {
-  let score = 0;
-  const issues = [];
-
-  // Title
-  if (hasTitle) {
-    score += 15;
-  } else {
-    issues.push("Title etiketi eksik.");
+function buildSeoInsights($, html, url, title, description) {
+  if (!$) {
+    return {
+      score: 0,
+      issues: ["HTML parse edilemedi."],
+      h1Count: 0,
+      h2Count: 0,
+      hasCanonical: false,
+      hasRobotsMeta: false,
+      hasOgTags: false,
+      hasTwitterCard: false,
+      canonical: null,
+      robotsMeta: null,
+    };
   }
 
-  // Description
-  if (hasDescription) {
-    score += 15;
-  } else {
+  const h1Count = $("h1").length;
+  const h2Count = $("h2").length;
+
+  const canonicalTag = $('link[rel="canonical"]').attr("href") || null;
+  const robotsMeta = $('meta[name="robots"]').attr("content") || null;
+
+  const hasCanonical = !!canonicalTag;
+  const hasRobotsMeta = !!robotsMeta;
+
+  const hasOgTags =
+    $('meta[property^="og:"], meta[name^="og:"]').length > 0;
+  const hasTwitterCard =
+    $('meta[name^="twitter:"], meta[property^="twitter:"]').length > 0;
+
+  const issues = [];
+
+  if (!description) {
     issues.push("Meta description eksik.");
   }
 
-  // H1
-  if (h1Count === 1) {
-    score += 15;
-  } else if (h1Count === 0) {
-    issues.push("Hiç H1 başlığı yok.");
-  } else if (h1Count > 1) {
-    issues.push("Birden fazla H1 başlığı var.");
-  }
-
-  // H2
-  if (h2Count >= 1) {
-    score += 10;
-  } else {
-    issues.push("H2 başlık yapısı zayıf.");
-  }
-
-  // Canonical
-  if (hasCanonical) {
-    score += 10;
-  } else {
-    issues.push("Canonical link tanımlanmamış.");
-  }
-
-  // OG
-  if (hasOg) {
-    score += 10;
-  } else {
+  if (!hasOgTags) {
     issues.push("Open Graph (og:) etiketleri eksik.");
   }
 
-  // Twitter
-  if (hasTwitter) {
-    score += 5;
-  } else {
+  if (!hasTwitterCard) {
     issues.push("Twitter Card etiketleri eksik.");
   }
 
-  // Robots
-  if (robots) {
-    if (robots.includes("noindex")) {
-      issues.push("Robots meta'da noindex var (dikkat).");
-      score -= 20;
-    }
-    if (robots.includes("nofollow")) {
-      issues.push("Robots meta'da nofollow var (dikkat).");
-      score -= 10;
-    }
+  if (!hasCanonical) {
+    issues.push("Canonical URL etiketi eksik.");
   }
+
+  if (!hasRobotsMeta) {
+    issues.push("Robots meta etiketi eksik.");
+  }
+
+  // Basit skor hesaplama: 100 üzerinden
+  let score = 100;
+
+  if (!title) score -= 10;
+  if (!description) score -= 15;
+  if (!hasCanonical) score -= 10;
+  if (!hasOgTags) score -= 10;
+  if (!hasTwitterCard) score -= 5;
+  if (!hasRobotsMeta) score -= 5;
+
+  // Aşırı h1 sayısı ufak eksi (ama kritik değil)
+  if (h1Count === 0) score -= 10;
+  if (h1Count > 3) score -= 5;
 
   if (score < 0) score = 0;
   if (score > 100) score = 100;
 
-  return { seoScore: score, issues };
+  return {
+    score,
+    issues,
+    h1Count,
+    h2Count,
+    hasCanonical,
+    hasRobotsMeta,
+    hasOgTags,
+    hasTwitterCard,
+    canonical: canonicalTag,
+    robotsMeta,
+  };
 }
 
 /**
- * Genel kalite skoru
- *  - SEO skorunu, içerik uzunluğunu ve title/description durumunu harmanlar
+ * Basit performans / içerik analizi:
+ * - responseTimeMs
+ * - contentLength
+ * - kategori (small/medium/large/huge)
  */
-function computeOverallScore({
-  seoScore,
-  contentLength,
-  hasTitle,
-  hasDescription,
-}) {
-  let score = 40;
+function buildPerformanceInsights(startMs, html) {
+  const endMs = Date.now();
+  const responseTimeMs = endMs - startMs;
+  const contentLength = html ? Buffer.byteLength(html, "utf8") : 0;
 
-  // SEO temel skoru
-  score += seoScore * 0.4; // max +40
+  let contentSizeCategory = "small";
+  if (contentLength > 200_000) contentSizeCategory = "medium";
+  if (contentLength > 800_000) contentSizeCategory = "large";
+  if (contentLength > 2_000_000) contentSizeCategory = "huge";
 
-  // İçerik uzunluğuna göre
-  if (contentLength > 0 && contentLength < 10_000) {
-    score += 0; // çok zayıf içerik
-  } else if (contentLength >= 10_000 && contentLength < 80_000) {
-    score += 10;
-  } else if (contentLength >= 80_000 && contentLength < 300_000) {
-    score += 20;
-  } else if (contentLength >= 300_000) {
-    score += 15; // çok büyük HTML → hafif kırp
-  }
-
-  // Title / description ekstra
-  if (hasTitle) score += 5;
-  if (hasDescription) score += 5;
-
-  if (score < 0) score = 0;
-  if (score > 100) score = 100;
-
-  return Math.round(score);
+  return {
+    responseTimeMs,
+    contentLength,
+    contentSizeCategory,
+  };
 }
 
 /**
- * Website intel ana fonksiyonu (V2)
+ * Website intel ana fonksiyon:
+ *  - URL normalize edilir
+ *  - axios ile HTML çekilir
+ *  - cheerio ile parse edilir
+ *  - tech + seo + performans + yapı + skor üretilir
+ *  - website_intel tablosuna kaydedilir
+ *  - intel objesi döndürülür
  *
  * Input: { url, leadId? }
- * Output:
- *  {
- *    url,
- *    httpStatus,
- *    title,
- *    description,
- *    meta: {
- *      tech: {...},
- *      seo: {
- *        score: number,
- *        issues: string[],
- *        h1Count,
- *        h2Count,
- *        hasCanonical,
- *        hasRobotsMeta,
- *        hasOgTags,
- *        hasTwitterCard
- *      },
- *      structure: {
- *        hasTitle,
- *        hasDescription
- *      },
- *      score,           // overall score (0–100)
- *      hasTitle,
- *      hasDescription,
- *      contentLength,
- *      fetchedAt
- *    },
- *    error: null | string
- *  }
  */
 async function enrichWebsiteFromUrl({ url, leadId = null }) {
+  const normalizedUrl = normalizeUrl(url);
+  const fetchedAt = new Date().toISOString();
+
+  if (!normalizedUrl) {
+    throw new Error("Geçerli bir URL gerekli.");
+  }
+
   const db = await getCrmDb();
 
   let httpStatus = null;
   let title = null;
   let description = null;
-  let html = null;
+  let meta = null;
   let errorMessage = null;
 
-  try {
-    log.info("[WebIntel] Website analiz başlıyor", { url });
+  let html = "";
+  let response = null;
 
-    const response = await axios.get(url, {
-      timeout: 15000,
-      validateStatus: () => true, // 4xx/5xx olsa bile içeriği al
+  const startedAt = Date.now();
+
+  try {
+    log.info("[WebIntel] Website analiz başlıyor", { url: normalizedUrl });
+
+    response = await axios.get(normalizedUrl, {
+      timeout: 10000,
+      maxRedirects: 5,
+      validateStatus: () => true, // 200–500 arası hepsini al
     });
 
     httpStatus = response.status || null;
     html = typeof response.data === "string" ? response.data : "";
 
-    title = extractTitle(html);
-    description = extractMetaDescription(html);
-  } catch (err) {
-    errorMessage = err.message;
-    log.warn("[WebIntel] Website fetch hatası", {
-      url,
+    const $ = cheerio.load(html);
+
+    title = $("title").first().text() || null;
+    description =
+      $('meta[name="description"]').attr("content") ||
+      $('meta[property="og:description"]').attr("content") ||
+      null;
+
+    const tech = buildTechInsights(html);
+    const seo = buildSeoInsights($, html, normalizedUrl, title, description);
+    const performance = buildPerformanceInsights(startedAt, html);
+
+    // Genel kalite skoru (SEO + performans kombosu)
+    let combinedScore = Math.round(
+      0.6 * seo.score +
+        0.4 *
+          (performance.responseTimeMs <= 1000
+            ? 100
+            : performance.responseTimeMs <= 3000
+            ? 80
+            : performance.responseTimeMs <= 7000
+            ? 60
+            : 40)
+    );
+    if (combinedScore > 100) combinedScore = 100;
+    if (combinedScore < 0) combinedScore = 0;
+
+    meta = {
+      tech,
+      seo,
+      structure: {
+        hasTitle: !!title,
+        hasDescription: !!description,
+      },
+      performance,
+      score: combinedScore,
+      hasTitle: !!title,
+      hasDescription: !!description,
+      contentLength: performance.contentLength,
+      fetchedAt,
+    };
+
+    const intel = {
+      url: normalizedUrl,
       httpStatus,
-      error: err.message,
-    });
-  }
+      title,
+      description,
+      meta,
+      error: null,
+    };
 
-  const contentLength = html ? html.length : 0;
-
-  // Yapı analizi
-  const h1Count = countTag(html, "h1");
-  const h2Count = countTag(html, "h2");
-  const canonical = extractCanonical(html);
-  const robotsMeta = extractMetaRobots(html);
-  const og = hasOgTags(html);
-  const twitter = hasTwitterCard(html);
-
-  const hasTitle = !!title;
-  const hasDescription = !!description;
-
-  // Tech analizi
-  const tech = detectTech(html);
-
-  // SEO ve genel skorlar
-  const { seoScore, issues } = computeSeoScore({
-    hasTitle,
-    hasDescription,
-    h1Count,
-    h2Count,
-    hasCanonical: !!canonical,
-    hasOg: og,
-    hasTwitter: twitter,
-    robots: robotsMeta,
-  });
-
-  const overallScore = computeOverallScore({
-    seoScore,
-    contentLength,
-    hasTitle,
-    hasDescription,
-  });
-
-  const fetchedAt = new Date().toISOString();
-
-  const meta = {
-    tech,
-    seo: {
-      score: seoScore,
-      issues,
-      h1Count,
-      h2Count,
-      hasCanonical: !!canonical,
-      hasRobotsMeta: !!robotsMeta,
-      hasOgTags: og,
-      hasTwitterCard: twitter,
-      canonical,
-      robotsMeta,
-    },
-    structure: {
-      hasTitle,
-      hasDescription,
-    },
-    score: overallScore, // 🔹 overall kalite skoru
-    hasTitle,
-    hasDescription,
-    contentLength,
-    fetchedAt,
-  };
-
-  // DB'ye yaz
-  try {
+    // DB kaydı
     db.prepare(
       `
       INSERT INTO website_intel (
@@ -356,46 +265,69 @@ async function enrichWebsiteFromUrl({ url, leadId = null }) {
         last_checked_at,
         error_message
       )
-      VALUES (
-        @lead_id,
-        @url,
-        @http_status,
-        @title,
-        @description,
-        @meta_json,
-        datetime('now'),
-        @error_message
-      );
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `
-    ).run({
-      lead_id: leadId || null,
-      url,
-      http_status: httpStatus,
+    ).run(
+      leadId || null,
+      normalizedUrl,
+      httpStatus,
       title,
       description,
-      meta_json: JSON.stringify(meta),
-      error_message: errorMessage,
-    });
+      JSON.stringify(meta),
+      fetchedAt,
+      null
+    );
 
     log.info("[WebIntel] Website intel kaydedildi", {
-      url,
+      url: normalizedUrl,
       httpStatus,
     });
-  } catch (dbErr) {
-    log.error("[WebIntel] DB yazma hatası", {
-      url,
-      error: dbErr.message,
-    });
-  }
 
-  return {
-    url,
-    httpStatus,
-    title,
-    description,
-    meta,
-    error: errorMessage,
-  };
+    return intel;
+  } catch (err) {
+    errorMessage = err.message || "Unknown error";
+
+    log.warn("[WebIntel] Website fetch hatası", {
+      url: normalizedUrl,
+      httpStatus,
+      error: errorMessage,
+    });
+
+    // Hatalı durumlarda da DB’ye kaydedelim ki geçmişte ne denemişiz görelim
+    db.prepare(
+      `
+      INSERT INTO website_intel (
+        lead_id,
+        url,
+        http_status,
+        title,
+        description,
+        meta_json,
+        last_checked_at,
+        error_message
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `
+    ).run(
+      leadId || null,
+      normalizedUrl,
+      httpStatus,
+      null,
+      null,
+      null,
+      fetchedAt,
+      errorMessage
+    );
+
+    return {
+      url: normalizedUrl,
+      httpStatus,
+      title: null,
+      description: null,
+      meta: null,
+      error: errorMessage,
+    };
+  }
 }
 
 module.exports = {
