@@ -27,11 +27,10 @@ function safeGet(obj, path, defaultValue = null) {
       city = parts.length > 1 ? parts[parts.length - 2].trim() : null;
     }
   
-    const country = null; // ileride geocoding ile doldurulabilir
-    const website = place.website || null; // textsearch result genelde vermez, placeDetails gerekebilir (V2'de)
-    const phone = null; // V1 skeleton: telefon bilgisi için ekstra call yok
+    const country = null; // V2'de geocoding ile doldurulabilir
+    const website = place.website || null; // V2'de Place Details ile zenginleştirilebilir
+    const phone = null; // V1 skeleton: extra call yok
   
-    // kategori: keyword + place.types birleşimi
     const placeTypes = Array.isArray(place.types) ? place.types.join(",") : "";
     const category = keyword || placeTypes;
   

@@ -14,9 +14,9 @@ exports.acquireFromGooglePlaces = async (req, res) => {
       });
     }
 
-    const radiusValue = radius || 8000; // metre cinsinden default
+    const radiusValue = radius || 8000;
 
-    log("INFO", "[LeadAcq] Google Places taraması başlıyor", {
+    log.info("[LeadAcq] Google Places taraması başlıyor", {
       location,
       keyword,
       radius: radiusValue,
@@ -32,8 +32,9 @@ exports.acquireFromGooglePlaces = async (req, res) => {
       ok: true,
       ...result,
     });
+
   } catch (err) {
-    log("ERROR", "[LeadAcq] Google Places tarama hatası", {
+    log.error("[LeadAcq] Google Places tarama hatası", {
       error: err.message,
       stack: err.stack,
     });
