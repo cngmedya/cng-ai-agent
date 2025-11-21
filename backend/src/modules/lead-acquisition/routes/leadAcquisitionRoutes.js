@@ -3,16 +3,16 @@
 const express = require("express");
 const router = express.Router();
 
-// middleware eklemeyi unutmayalım!
+// API key middleware
 const { apiKeyAuth } = require("../../../middleware/apiKeyAuth");
 
+// Controller fonksiyonları
 const {
   acquireFromGooglePlaces,
   runWebsiteIntelBatchForLeads,
+  runReputationIntel,
+  runReputationIntelBatchForLeads,
 } = require("../controllers/leadAcquisitionController");
-
-// Yeni reputation controller
-const { runReputationIntel } = require("../controllers/leadAcquisitionController");
 
 // -------------------------------
 // GOOGLE PLACES -> LEAD ACQUISITION
@@ -29,12 +29,18 @@ router.post(
 );
 
 // -------------------------------
-// REPUTATION INTEL (AI + Search)
+// REPUTATION INTEL (single + batch)
 // -------------------------------
 router.post(
   "/intel/reputation",
   apiKeyAuth,
   runReputationIntel
+);
+
+router.post(
+  "/intel/reputation/batch",
+  apiKeyAuth,
+  runReputationIntelBatchForLeads
 );
 
 module.exports = router;

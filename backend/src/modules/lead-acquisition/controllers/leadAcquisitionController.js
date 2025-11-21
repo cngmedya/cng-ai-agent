@@ -1,5 +1,6 @@
 // backend/src/modules/lead-acquisition/controllers/leadAcquisitionController.js
 
+const { getCrmDb } = require("../../../db/db");
 const { log } = require("../../../lib/logger");
 const leadAcquisitionService = require("../services/leadAcquisitionService");
 const websiteIntelService = require("../services/websiteIntelService");
@@ -148,4 +149,68 @@ exports.runReputationIntel = async (req, res) => {
 
   const result = await runReputationIntelForLead(leadId);
   return res.json(result);
+};
+
+exports.runReputationIntelBatchForLeads = async (req, res) => {
+  const { limit = 5 } = req.body || {};
+
+  try {
+    const db = await getCrmDb();
+
+    // Daha önce reputation çalışmamış lead'leri seç
+    const rows = db
+      .prepare(
+        `
+        SELECT pl.id, pl.company_name
+        FROM potential_leads pl
+        LEFT JOIN lead_reputation_insights lri ON lri.lead_id = pl.id
+        WHERE lri.id IS NULL
+        ORDER BY pl.id ASC
+        LIMIT ?
+      `
+      )
+      .all(limit);
+
+    if (!rows.length) {
+      return res.json({
+        ok: true,
+        processedCount: 0,
+        items: [],
+        note: "Reputation intel bekleyen lead bulunamadı.",
+      });
+    }
+
+    const items = [];
+
+    for (const row of rows) {
+      const result = await runReputationIntelForLead(row.id);
+
+      items.push({
+        leadId: row.id,
+        companyName: row.company_name,
+        ok: result.ok,
+        reputation_score: result.reputation_score || null,
+        risk_level: result.risk_level || null,
+      });
+    }
+
+    log.info("[ReputationBatch] Batch tamamlandı", {
+      processedCount: items.length,
+    });
+
+    return res.json({
+      ok: true,
+      processedCount: items.length,
+      items,
+    });
+  } catch (err) {
+    log.error("[ReputationBatch] HATA", {
+      error: err.message,
+      stack: err.stack,
+    });
+
+    return res
+      .status(500)
+      .json({ ok: false, error: "Reputation batch hata verdi." });
+  }
 };
