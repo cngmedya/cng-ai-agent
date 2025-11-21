@@ -1,6 +1,6 @@
 // backend/src/modules/lead-acquisition/utils/domainGuess.js
 
-// Türkçe karakterleri sadeleştirip slug oluşturma
+// Türkçe karakterleri sadeleştirip sade bir slug üretir
 function slugifyName(name = "") {
     if (!name) return "";
   
@@ -20,14 +20,30 @@ function slugifyName(name = "") {
       .map((ch) => map[ch] || ch)
       .join("");
   
-    // "mimarlık ofisi", "mimarlık & iç mimarlık" gibi şeyleri sadeleştir
+    // çok genel kelimeleri ayıklayalım
+    s = s.replace(/mimarlık ofisi/g, "mimarlık");
     s = s.replace(/mimarlik ofisi/g, "mimarlik");
-    s = s.replace(/iç mimarlik/g, "icmimarlik");
-    s = s.replace(/&/g, " ");
-    s = s.replace(/[^a-z0-9\s]/g, " ");
-    s = s.replace(/\s+/g, " ").trim();
+    s = s.replace(/iç mimarlık/g, "ic mimarlik");
+    s = s.replace(/ic mimarlık/g, "ic mimarlik");
+    s = s.replace(/icmimarlık/g, "icmimarlik");
+    s = s.replace(/istanbul/g, "");
+    s = s.replace(/proje tasarım ve uygulama/g, "");
+    s = s.replace(/proje tasarim ve uygulama/g, "");
+    s = s.replace(/proje tasarım/g, "");
+    s = s.replace(/proje tasarim/g, "");
+    s = s.replace(/tasarım/g, "");
+    s = s.replace(/tasarim/g, "");
+    s = s.replace(/ofisi/g, "");
+    s = s.replace(/sanayi ve ticaret a\.?ş\.?/g, "as");
+    s = s.replace(/a\.?ş\.?/g, "as");
+    s = s.replace(/limited şirketi/g, "ltd");
+    s = s.replace(/ltd ?şti/g, "ltd");
   
-    // boşlukları kaldır
+    // harf ve rakam dışı her şeyi boşluk yap
+    s = s.replace(/[^a-z0-9\s]/g, " ");
+    // birden fazla boşluğu tek boşluğa indir
+    s = s.replace(/\s+/g, " ").trim();
+    // boşlukları tamamen kaldır
     s = s.replace(/\s+/g, "");
   
     return s;
@@ -35,39 +51,43 @@ function slugifyName(name = "") {
   
   /**
    * Firma adı (ve opsiyonel şehir) üzerinden domain tahminleri üretir.
-   * En basit V1 mantığı: slug.com, slug.com.tr, slugmimarlik.com.tr vs.
+   * V1 mantığı: slug.com, slug.com.tr, slugmimarlik.com(.tr), slug+city.com(.tr)
+   *
+   * @param {string} company_name
+   * @param {string} [city]
+   * @returns {string[]} URL listesi (https://... formatında)
    */
-  function guessDomainsForLead({ company_name, city }) {
+  function guessDomainsForLead(company_name, city) {
     const baseSlug = slugifyName(company_name || "");
   
     if (!baseSlug) return [];
   
-    const candidates = new Set();
+    const domains = new Set();
   
     // temel varyantlar
-    candidates.add(`${baseSlug}.com`);
-    candidates.add(`${baseSlug}.com.tr`);
+    domains.add(`${baseSlug}.com`);
+    domains.add(`${baseSlug}.com.tr`);
   
-    // "mimarlik" içermiyorsa ek varyant
+    // "mimarlik" içermiyorsa ekstra mimarlik eklemeyi dene
     if (!baseSlug.includes("mimarlik")) {
-      candidates.add(`${baseSlug}mimarlik.com`);
-      candidates.add(`${baseSlug}mimarlik.com.tr`);
+      domains.add(`${baseSlug}mimarlik.com`);
+      domains.add(`${baseSlug}mimarlik.com.tr`);
     }
   
-    // şehir bazlı varyant (çok agresif değiliz, sadece 1–2 örnek)
+    // şehir varsa şehirle kombine et (çok agresif değiliz şimdilik)
     if (city) {
       const citySlug = slugifyName(city);
       if (citySlug) {
-        candidates.add(`${baseSlug}${citySlug}.com`);
-        candidates.add(`${baseSlug}${citySlug}.com.tr`);
+        domains.add(`${baseSlug}${citySlug}.com`);
+        domains.add(`${baseSlug}${citySlug}.com.tr`);
       }
     }
   
-    // URL formatına çevir (https:// + www. / çıplak)
+    // domain → URL
     const urls = new Set();
-    for (const domain of candidates) {
-      urls.add(`https://www.${domain}`);
-      urls.add(`https://${domain}`);
+    for (const d of domains) {
+      urls.add(`https://www.${d}`);
+      urls.add(`https://${d}`);
     }
   
     return Array.from(urls);

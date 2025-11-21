@@ -5,34 +5,28 @@ const { getCrmDb } = require("../../../db/db");
 const { guessDomainsForLead } = require("../utils/domainGuess");
 const websiteIntelService = require("./websiteIntelService");
 
-function sqlValue(value) {
-  if (value === null || value === undefined) return "NULL";
-  const str = String(value);
-  const escaped = str.replace(/'/g, "''");
-  return `'${escaped}'`;
-}
-
 /**
- * potential_leads tablosundaki website'i boş olan lead'ler için,
- * firma adından domain tahmini yapar ve ilk başarılı olanı website olarak kaydeder.
- *
- * @param {Object} params
- * @param {number} params.limit - bir seferde işlenecek lead sayısı (default 5)
+ * potential_leads tablosundaki website'i boş olan lead'ler için:
+ *  - Firma adından domain adayları üretir
+ *  - Her adayı sırayla deneyerek website_intel'e yazdırır
+ *  - HTTP status 200–399 dönen ilk domain'i "geçerli website" kabul eder
+ *  - Sadece bu geçerli domain'i potential_leads.website alanına yazar
  */
 async function runWebsiteIntelBatch({ limit = 5 } = {}) {
   const db = await getCrmDb();
 
-  // website'i boş olan lead'leri çek
-  const leads = await db.all(
-    `
+  // Website alanı boş olan lead'leri çek
+  const selectStmt = db.prepare(`
     SELECT id, company_name, city, website
     FROM potential_leads
     WHERE (website IS NULL OR website = '')
-    LIMIT ${Number(limit) || 5};
-    `
-  );
+    ORDER BY id ASC
+    LIMIT ?
+  `);
 
-  if (!leads || leads.length === 0) {
+  const leads = selectStmt.all(Number(limit) || 5);
+
+  if (!Array.isArray(leads) || leads.length === 0) {
     log.info("[WebIntelBatch] İşlenecek lead bulunamadı.");
     return {
       ok: true,
@@ -41,38 +35,57 @@ async function runWebsiteIntelBatch({ limit = 5 } = {}) {
     };
   }
 
-  log.info("[WebIntelBatch] Batch başlıyor", {
+  log.info("[WebIntelBatch] Batch website intel başlıyor", {
     count: leads.length,
+    limit,
   });
+
+  // Geçerli website bulunduğunda potential_leads'i güncellemek için
+  const updateStmt = db.prepare(`
+    UPDATE potential_leads
+    SET website = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `);
 
   const items = [];
 
   for (const lead of leads) {
     const { id, company_name, city } = lead;
 
-    const candidates = guessDomainsForLead({
-      company_name,
-      city,
-    });
+    // 1) Domain adaylarını üret
+    const candidates = guessDomainsForLead(company_name, city);
 
-    if (!candidates.length) {
+    if (!candidates || candidates.length === 0) {
+      log.warn("[WebIntelBatch] Domain adayı üretilemedi", {
+        id,
+        company_name,
+      });
+
       items.push({
         id,
         company_name,
         status: "no_domain_candidates",
       });
+
       continue;
     }
+
+    log.info("[WebIntelBatch] Domain tahmini", {
+      leadId: id,
+      company: company_name,
+      guesses: candidates,
+    });
 
     let chosenUrl = null;
     let lastIntel = null;
 
+    // 2) Her domain adayını sırayla dene
     for (const url of candidates) {
       try {
         const intel = await websiteIntelService.enrichWebsiteFromUrl({ url });
         lastIntel = intel;
 
-        // 200–399 arası HTTP status'leri "başarılı" kabul edelim
+        // Sadece gerçekten çalışan (200–399) domain'i kabul et
         if (
           intel.httpStatus &&
           intel.httpStatus >= 200 &&
@@ -82,19 +95,25 @@ async function runWebsiteIntelBatch({ limit = 5 } = {}) {
           break;
         }
       } catch (err) {
-        // enrichWebsiteFromUrl zaten logluyor, burada sadece devam ediyoruz
-        continue;
+        log.warn("[WebIntelBatch] Website intel hatası, bir sonraki adaya geçiliyor", {
+          leadId: id,
+          url,
+          error: err?.message || String(err),
+        });
+        // bu aday olmadı, sıradaki adaya geç
       }
     }
 
     if (chosenUrl) {
-      const sql = `
-        UPDATE potential_leads
-        SET website = ${sqlValue(chosenUrl)},
-            updated_at = datetime('now')
-        WHERE id = ${id};
-      `;
-      await db.exec(sql);
+      // 3) Sadece geçerli domain'i potential_leads'e yaz
+      updateStmt.run(chosenUrl, id);
+
+      log.info("[WebIntelBatch] Lead için geçerli website bulundu", {
+        id,
+        company_name,
+        website: chosenUrl,
+        httpStatus: lastIntel ? lastIntel.httpStatus : null,
+      });
 
       items.push({
         id,
@@ -103,25 +122,23 @@ async function runWebsiteIntelBatch({ limit = 5 } = {}) {
         httpStatus: lastIntel ? lastIntel.httpStatus : null,
         status: "ok",
       });
-
-      log.info("[WebIntelBatch] Lead için website bulundu", {
+    } else {
+      log.warn("[WebIntelBatch] Geçerli website bulunamadı", {
         id,
         company_name,
-        chosenUrl,
       });
-    } else {
+
       items.push({
         id,
         company_name,
         status: "no_valid_website",
       });
-
-      log.warn("[WebIntelBatch] Geçerli website bulunamadı", {
-        id,
-        company_name,
-      });
     }
   }
+
+  log.info("[WebIntelBatch] Batch tamamlandı", {
+    processedCount: items.length,
+  });
 
   return {
     ok: true,
