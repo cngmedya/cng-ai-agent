@@ -3,6 +3,7 @@
 const { log } = require("../../../lib/logger");
 const leadAcquisitionService = require("../services/leadAcquisitionService");
 const websiteIntelService = require("../services/websiteIntelService");
+const websiteAiAnalysisService = require("../services/websiteAiAnalysisService");
 
 exports.acquireFromGooglePlaces = async (req, res) => {
   try {
@@ -73,6 +74,43 @@ exports.enrichWebsiteIntel = async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Website intel sırasında bir hata oluştu.",
+    });
+  }
+};
+
+exports.analyzeWebsiteWithAI = async (req, res) => {
+  try {
+    const { url } = req.body || {};
+
+    if (!url) {
+      return res.status(400).json({
+        ok: false,
+        error: "url alanı zorunludur.",
+      });
+    }
+
+    // 1) Önce raw website intel'i al (DB'ye kaydediyor zaten)
+    const intel = await websiteIntelService.enrichWebsiteFromUrl({ url });
+
+    // 2) Sonra AI analizi yap
+    const analysis = await websiteAiAnalysisService.analyzeWebsiteWithAI({
+      url,
+      intel,
+    });
+
+    return res.json({
+      ok: true,
+      analysis,
+    });
+  } catch (err) {
+    log.error("[WebIntelAI] Website AI analiz hatası", {
+      error: err.message,
+      stack: err.stack,
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: "Website AI analizi sırasında bir hata oluştu.",
     });
   }
 };

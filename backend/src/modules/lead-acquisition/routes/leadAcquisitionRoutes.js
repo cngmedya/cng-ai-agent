@@ -6,7 +6,10 @@ const leadAcquisitionController = require("../controllers/leadAcquisitionControl
 // Google Places üzerinden potansiyel müşteri tarama
 router.post("/acquire/google", leadAcquisitionController.acquireFromGooglePlaces);
 
-// Website intelligence: URL bazlı analiz
+// Website intelligence: URL bazlı ham meta analiz
 router.post("/intel/website", leadAcquisitionController.enrichWebsiteIntel);
+
+// Website intelligence + AI SWOT + dijital skor analizi
+router.post("/intel/website/ai", leadAcquisitionController.analyzeWebsiteWithAI);
 
 module.exports = router;
