@@ -2,21 +2,22 @@
 
 const { getCrmDb } = require("../../../db/db");
 const { log } = require("../../../lib/logger");
-
 const leadAcquisitionService = require("../services/leadAcquisitionService");
 const websiteIntelService = require("../services/websiteIntelService");
 const websiteAiAnalysisService = require("../services/websiteAiAnalysisService");
 const { runWebsiteIntelBatch } = require("../services/leadBatchWebsiteIntelService");
+const { runDomainDiscoveryBatch } = require("../services/leadDomainDiscoveryService");
+const { getLeadList } = require("../services/leadListService");
 const {
   getLeadIntel,
   getLeadIntelSummary,
 } = require("../services/leadIntelService");
-const { runReputationIntelForLead } = require("../services/leadReputationOrchestrator");
-const { runDomainDiscoveryBatch } = require("../services/leadDomainDiscoveryService");
 
-/**
- * Google Places üzerinden lead toplama
- */
+const { runReputationIntelForLead } = require("../services/leadReputationOrchestrator");
+
+// --------------------------------------------------------
+// GOOGLE PLACES → LEAD ACQUISITION
+// --------------------------------------------------------
 exports.acquireFromGooglePlaces = async (req, res) => {
   try {
     const { location, keyword, radius } = req.body || {};
@@ -45,12 +46,7 @@ exports.acquireFromGooglePlaces = async (req, res) => {
 
     return res.json({
       ok: true,
-      data: {
-        sourceId: result.sourceId,
-        foundCount: result.foundCount,
-        insertedCount: result.insertedCount,
-        duplicateCount: result.duplicateCount,
-      },
+      data: result,
       error: null,
     });
   } catch (err) {
@@ -67,9 +63,9 @@ exports.acquireFromGooglePlaces = async (req, res) => {
   }
 };
 
-/**
- * Tek bir URL için website intel enrichment
- */
+// --------------------------------------------------------
+// WEBSITE INTEL (single + batch)
+// --------------------------------------------------------
 exports.enrichWebsiteIntel = async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -103,52 +99,6 @@ exports.enrichWebsiteIntel = async (req, res) => {
   }
 };
 
-/**
- * Tek bir URL için website + AI analizi
- */
-exports.analyzeWebsiteWithAI = async (req, res) => {
-  try {
-    const { url } = req.body || {};
-
-    if (!url) {
-      return res.status(400).json({
-        ok: false,
-        data: null,
-        error: "url alanı zorunludur.",
-      });
-    }
-
-    // 1) Önce raw website intel'i al (DB'ye kaydediyor zaten)
-    const intel = await websiteIntelService.enrichWebsiteFromUrl({ url });
-
-    // 2) Sonra AI analizi yap
-    const analysis = await websiteAiAnalysisService.analyzeWebsiteWithAI({
-      url,
-      intel,
-    });
-
-    return res.json({
-      ok: true,
-      data: { analysis },
-      error: null,
-    });
-  } catch (err) {
-    log.error("[WebIntelAI] Website AI analiz hatası", {
-      error: err.message,
-      stack: err.stack,
-    });
-
-    return res.status(500).json({
-      ok: false,
-      data: null,
-      error: "Website AI analizi sırasında bir hata oluştu.",
-    });
-  }
-};
-
-/**
- * Batch website intel – lead'ler için domain/website intel çalıştırma
- */
 exports.runWebsiteIntelBatchForLeads = async (req, res) => {
   try {
     const { limit } = req.body || {};
@@ -175,30 +125,35 @@ exports.runWebsiteIntelBatchForLeads = async (req, res) => {
   }
 };
 
-/**
- * Tek bir lead için reputation orchestrator (search + AI reputation)
- */
-exports.runReputationIntel = async (req, res) => {
+// --------------------------------------------------------
+// AI Website Analizi (şimdilik dev util, istersen kullanırız)
+// --------------------------------------------------------
+exports.analyzeWebsiteWithAI = async (req, res) => {
   try {
-    const { leadId } = req.body || {};
+    const { url } = req.body || {};
 
-    if (!leadId) {
+    if (!url) {
       return res.status(400).json({
         ok: false,
         data: null,
-        error: "leadId required",
+        error: "url alanı zorunludur.",
       });
     }
 
-    const result = await runReputationIntelForLead(leadId);
+    const intel = await websiteIntelService.enrichWebsiteFromUrl({ url });
+
+    const analysis = await websiteAiAnalysisService.analyzeWebsiteWithAI({
+      url,
+      intel,
+    });
 
     return res.json({
       ok: true,
-      data: result,
+      data: { analysis },
       error: null,
     });
   } catch (err) {
-    log.error("[ReputationOrchestrator] Tek lead reputation hatası", {
+    log.error("[WebIntelAI] Website AI analiz hatası", {
       error: err.message,
       stack: err.stack,
     });
@@ -206,20 +161,48 @@ exports.runReputationIntel = async (req, res) => {
     return res.status(500).json({
       ok: false,
       data: null,
-      error: "Reputation analizi sırasında bir hata oluştu.",
+      error: "Website AI analizi sırasında bir hata oluştu.",
     });
   }
 };
 
-/**
- * Reputation batch – reputation olmayan lead'ler için toplu analiz
- */
-exports.runReputationIntelBatchForLeads = async (req, res) => {
+// --------------------------------------------------------
+// REPUTATION INTEL (single + batch)
+// --------------------------------------------------------
+exports.runReputationIntel = async (req, res) => {
+  const { leadId } = req.body || {};
+
+  if (!leadId) {
+    return res
+      .status(400)
+      .json({ ok: false, data: null, error: "leadId required" });
+  }
+
   try {
-    const { limit = 5 } = req.body || {};
+    const result = await runReputationIntelForLead(leadId);
+    return res.json({
+      ok: true,
+      data: result,
+      error: null,
+    });
+  } catch (err) {
+    log.error("[Reputation] HATA", {
+      error: err.message,
+      stack: err.stack,
+    });
+
+    return res
+      .status(500)
+      .json({ ok: false, data: null, error: "Reputation intel hata verdi." });
+  }
+};
+
+exports.runReputationIntelBatchForLeads = async (req, res) => {
+  const { limit = 5 } = req.body || {};
+
+  try {
     const db = await getCrmDb();
 
-    // Daha önce reputation çalışmamış lead'leri seç
     const rows = db
       .prepare(
         `
@@ -285,12 +268,12 @@ exports.runReputationIntelBatchForLeads = async (req, res) => {
   }
 };
 
-/**
- * Domain Discovery V2 – website'i boş olan lead'ler için domain bulma
- */
+// --------------------------------------------------------
+// DOMAIN DISCOVERY BATCH
+// --------------------------------------------------------
 exports.runDomainDiscoveryBatchController = async (req, res) => {
   try {
-    const { limit = 10 } = req.body || {};
+    const { limit = 20 } = req.body || {};
     const result = await runDomainDiscoveryBatch({ limit });
 
     return res.json({
@@ -299,7 +282,7 @@ exports.runDomainDiscoveryBatchController = async (req, res) => {
       error: null,
     });
   } catch (err) {
-    log.error("[DomainDiscovery] Batch HATA", {
+    log.error("[DomainDiscoveryBatch] HATA", {
       error: err.message,
       stack: err.stack,
     });
@@ -307,43 +290,56 @@ exports.runDomainDiscoveryBatchController = async (req, res) => {
     return res.status(500).json({
       ok: false,
       data: null,
-      error: "Domain discovery batch çalışırken bir hata oluştu.",
+      error: "Domain discovery batch hata verdi.",
     });
   }
 };
 
-/**
- * Tek bir lead için full intel (lead + website + search + reputation)
- */
+// --------------------------------------------------------
+// LEAD INTEL (single + summary, dashboard için)
+// --------------------------------------------------------
 exports.getLeadIntelController = async (req, res) => {
+  const leadId = parseInt(req.params.leadId || req.params.id, 10);
+
+  if (!leadId || Number.isNaN(leadId)) {
+    return res
+      .status(400)
+      .json({ ok: false, data: null, error: "Geçerli leadId gerekli." });
+  }
+
+  const intel = await getLeadIntel(leadId);
+
+  if (!intel) {
+    return res
+      .status(404)
+      .json({ ok: false, data: null, error: "Lead bulunamadı." });
+  }
+
+  return res.json({ ok: true, data: intel, error: null });
+};
+
+exports.getLeadIntelSummaryController = async (req, res) => {
+  const summary = await getLeadIntelSummary();
+  return res.json({ ok: true, data: summary, error: null });
+};
+
+// --------------------------------------------------------
+// LEAD LIST (frontend list view için ana endpoint)
+// --------------------------------------------------------
+exports.getLeadListController = async (req, res) => {
   try {
-    const leadId = parseInt(req.params.leadId || req.params.id, 10);
+    const limit = parseInt(req.query.limit || "50", 10);
+    const offset = parseInt(req.query.offset || "0", 10);
 
-    if (!leadId || Number.isNaN(leadId)) {
-      return res.status(400).json({
-        ok: false,
-        data: null,
-        error: "Geçerli leadId gerekli.",
-      });
-    }
-
-    const intel = await getLeadIntel(leadId);
-
-    if (!intel) {
-      return res.status(404).json({
-        ok: false,
-        data: null,
-        error: "Lead bulunamadı.",
-      });
-    }
+    const data = await getLeadList({ limit, offset });
 
     return res.json({
       ok: true,
-      data: intel,
+      data,
       error: null,
     });
   } catch (err) {
-    log.error("[LeadIntel] Lead intel hata", {
+    log.error("[LeadList] HATA", {
       error: err.message,
       stack: err.stack,
     });
@@ -351,33 +347,27 @@ exports.getLeadIntelController = async (req, res) => {
     return res.status(500).json({
       ok: false,
       data: null,
-      error: "Lead intel alınırken bir hata oluştu.",
+      error: "Lead listesi alınırken bir hata oluştu.",
     });
   }
 };
 
-/**
- * Intel summary (dashboard sayıları)
- */
-exports.getLeadIntelSummaryController = async (req, res) => {
+const { getLeadListWithIntel } = require("../services/leadIntelService");
+
+exports.getLeadListController = async (req, res) => {
   try {
-    const summary = await getLeadIntelSummary();
+    let { page, limit } = req.query;
 
-    return res.json({
-      ok: true,
-      data: summary,
-      error: null,
-    });
+    page = parseInt(page || "1", 10);
+    limit = parseInt(limit || "20", 10);
+
+    const data = await getLeadListWithIntel({ page, limit });
+
+    return res.json({ ok: true, data });
   } catch (err) {
-    log.error("[LeadIntel] Lead summary hata", {
-      error: err.message,
-      stack: err.stack,
-    });
-
     return res.status(500).json({
       ok: false,
-      data: null,
-      error: "Lead özetleri alınırken bir hata oluştu.",
+      error: err.message,
     });
   }
 };

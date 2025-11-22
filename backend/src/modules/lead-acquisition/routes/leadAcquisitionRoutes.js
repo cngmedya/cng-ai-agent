@@ -9,13 +9,14 @@ const { apiKeyAuth } = require("../../../middleware/apiKeyAuth");
 // Controller fonksiyonları
 const {
   acquireFromGooglePlaces,
+  enrichWebsiteIntel,
   runWebsiteIntelBatchForLeads,
   runReputationIntel,
   runReputationIntelBatchForLeads,
   getLeadIntelController,
   getLeadIntelSummaryController,
   runDomainDiscoveryBatchController,
-  enrichWebsiteIntel, // 🔹 TEK SEFER İMPORT
+  getLeadListController,
 } = require("../controllers/leadAcquisitionController");
 
 // -------------------------------
@@ -24,9 +25,13 @@ const {
 router.post("/acquire/google", apiKeyAuth, acquireFromGooglePlaces);
 
 // -------------------------------
-// WEBSITE INTEL (single)
+// WEBSITE INTEL (single URL)
 // -------------------------------
-router.post("/intel/website", apiKeyAuth, enrichWebsiteIntel);
+router.post(
+  "/intel/website",
+  apiKeyAuth,
+  enrichWebsiteIntel
+);
 
 // -------------------------------
 // WEBSITE INTEL BATCH
@@ -40,7 +45,11 @@ router.post(
 // -------------------------------
 // REPUTATION INTEL (single + batch)
 // -------------------------------
-router.post("/intel/reputation", apiKeyAuth, runReputationIntel);
+router.post(
+  "/intel/reputation",
+  apiKeyAuth,
+  runReputationIntel
+);
 
 router.post(
   "/intel/reputation/batch",
@@ -51,9 +60,26 @@ router.post(
 // -------------------------------
 // LEAD INTEL (dashboard için)
 // -------------------------------
-router.get("/intel/summary", apiKeyAuth, getLeadIntelSummaryController);
+router.get(
+  "/intel/summary",
+  apiKeyAuth,
+  getLeadIntelSummaryController
+);
 
-router.get("/intel/:leadId", apiKeyAuth, getLeadIntelController);
+router.get(
+  "/intel/:leadId",
+  apiKeyAuth,
+  getLeadIntelController
+);
+
+// -------------------------------
+// LEAD LIST (scorlu, inline intel snapshot)
+// -------------------------------
+router.get(
+  "/list",
+  apiKeyAuth,
+  getLeadListController
+);
 
 // -------------------------------
 // DOMAIN DISCOVERY BATCH

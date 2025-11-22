@@ -2,9 +2,11 @@
 
 const { log } = require("../../../lib/logger");
 const { getCrmDb } = require("../../../db/db");
-// 🔹 Burayı düzelttik: searchPlacesWithText yerine mevcut fonksiyon
-const { searchPlacesWithTextAndDetails } = require("./googlePlacesService");
+const {
+  searchPlacesWithTextAndDetails,
+} = require("./googlePlacesService");
 const { normalizePlaceToLead } = require("../utils/normalizeLead");
+const { buildNormalizedLeadMeta } = require("./leadQualityService");
 
 // SQL string içinde güvenli şekilde kullanmak için basit escape helper
 function sqlValue(value) {
@@ -17,34 +19,15 @@ function sqlValue(value) {
   return `'${escaped}'`;
 }
 
-/**
- * Google Places üzerinden lead toplama servisi
- *
- * Input:
- *  - location: "İstanbul" gibi şehir / bölge
- *  - keyword: "mimarlık ofisi" gibi arama terimi
- *  - radius: metre cinsinden yarıçap (opsiyonel, default 8000)
- *
- * Output:
- *  {
- *    sourceId: null (V1'de kullanılmıyor),
- *    foundCount: Google Places'ten gelen toplam sonuç sayısı,
- *    insertedCount: potential_leads tablosuna eklenen yeni kayıt sayısı,
- *    duplicateCount: aynı batch içinde tekrarlayan firma/adres kombinasyonları
- *  }
- */
 async function acquireFromGooglePlaces({ location, keyword, radius }) {
-  const radiusValue = radius || 8000;
-
-  // 1) Google Places sonuçlarını çek
-  // 🔹 Burayı da düzelttik: searchPlacesWithTextAndDetails kullanıyoruz
+  // 1) Google Places sonuçlarını çek (details ile)
   const { places, raw } = await searchPlacesWithTextAndDetails({
     location,
     keyword,
-    radius: radiusValue,
+    radius,
   });
 
-  log.info("[LeadAcq] Google Places sonuç sayısı", {
+  log.info("[LeadAcq] Google Places sonuç sayısı (details ile)", {
     count: places.length,
   });
 
@@ -60,8 +43,8 @@ async function acquireFromGooglePlaces({ location, keyword, radius }) {
   sqlBatch += `
     INSERT INTO lead_sources (query, source_type, raw_payload_json, created_at)
     VALUES (${sqlValue(queryLabel)}, 'google_places', ${sqlValue(
-      rawJson
-    )}, datetime('now'));
+    rawJson
+  )}, datetime('now'));
   `;
 
   let inserted = 0;
@@ -78,7 +61,6 @@ async function acquireFromGooglePlaces({ location, keyword, radius }) {
     });
 
     if (!lead.company_name) {
-      // Firma ismi yoksa bu kaydı es geç
       continue;
     }
 
@@ -88,6 +70,10 @@ async function acquireFromGooglePlaces({ location, keyword, radius }) {
       continue;
     }
     seenKeys.add(key);
+
+    // 🔹 V2: normalize + quality score
+    const meta = buildNormalizedLeadMeta(lead);
+
     inserted++;
 
     sqlBatch += `
@@ -101,6 +87,11 @@ async function acquireFromGooglePlaces({ location, keyword, radius }) {
         country,
         source,
         status,
+        normalized_name,
+        normalized_category,
+        normalized_city,
+        lead_quality_score,
+        lead_quality_notes,
         created_at,
         updated_at
       )
@@ -114,6 +105,11 @@ async function acquireFromGooglePlaces({ location, keyword, radius }) {
         ${sqlValue(lead.country)},
         ${sqlValue(lead.source)},
         'found',
+        ${sqlValue(meta.normalized_name)},
+        ${sqlValue(meta.normalized_category)},
+        ${sqlValue(meta.normalized_city)},
+        ${meta.lead_quality_score ?? 0},
+        ${sqlValue(meta.lead_quality_notes)},
         datetime('now'),
         datetime('now')
       );

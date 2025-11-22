@@ -1,177 +1,140 @@
-// backend/src/modules/lead-acquisition/services/leadBatchWebsiteIntelService.js
-
-const { log } = require("../../../lib/logger");
 const { getCrmDb } = require("../../../db/db");
-const { guessDomainsForLead } = require("../utils/domainGuess");
-const websiteIntelService = require("./websiteIntelService");
-const { analyzeWebsiteWithAI } = require("./websiteAiAnalysisService");
+const { log } = require("../../../lib/logger");
+const { enrichWebsiteFromUrl } = require("./websiteIntelService");
 
 /**
- * potential_leads tablosundaki website'i boş olan lead'ler için:
- *  - Firma adından max 5 kısa domain adayı üretir
- *  - Her adayı sırayla deneyerek website_intel'e yazdırır
- *  - HTTP status 200–399 dönen ilk domain'i "geçerli website" kabul eder
- *  - Sadece bu geçerli domain'i potential_leads.website alanına yazar
- *  - Ardından bu website için AI analizini tetikler (AI sonucu DB'ye yazmıyor, şimdilik sadece logluyor)
+ * Tek bir lead için website intel çalıştır
  */
-async function runWebsiteIntelBatch({ limit = 5 } = {}) {
+async function runWebsiteIntelForLead(lead) {
+  const { id, company_name, website } = lead;
+
+  if (!website) {
+    return {
+      leadId: id,
+      companyName: company_name,
+      website: null,
+      status: "skipped_no_website",
+      intel: null,
+    };
+  }
+
+  // URL http ile başlamıyorsa düzelt
+  let url = website.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url}`;
+  }
+
+  try {
+    log.info("[WebIntelBatch] Website intel başlıyor", {
+      leadId: id,
+      companyName: company_name,
+      url,
+    });
+
+    const intel = await enrichWebsiteFromUrl({
+      url,
+      leadId: id,
+    });
+
+    const ok =
+      typeof intel.httpStatus === "number" &&
+      intel.httpStatus >= 200 &&
+      intel.httpStatus < 400;
+
+    log.info("[WebIntelBatch] Website intel tamamlandı", {
+      leadId: id,
+      companyName: company_name,
+      url: intel.url,
+      httpStatus: intel.httpStatus,
+      ok,
+    });
+
+    return {
+      leadId: id,
+      companyName: company_name,
+      website: intel.url,
+      status: ok ? "ok" : "error_status",
+      httpStatus: intel.httpStatus ?? null,
+      intel,
+    };
+  } catch (err) {
+    log.warn("[WebIntelBatch] Website intel hata", {
+      leadId: id,
+      companyName: company_name,
+      url,
+      error: err.message,
+    });
+
+    return {
+      leadId: id,
+      companyName: company_name,
+      website: url,
+      status: "error",
+      httpStatus: null,
+      error: err.message,
+      intel: null,
+    };
+  }
+}
+
+/**
+ * Batch website intel:
+ *  - website'i dolu olan lead'leri seç
+ *  - website_intel tablosunda henüz kaydı OLMAYAN lead'ler
+ *  - her biri için runWebsiteIntelForLead
+ */
+async function runWebsiteIntelBatch({ limit = 10 } = {}) {
   const db = await getCrmDb();
 
-  const selectStmt = db.prepare(`
-    SELECT id, company_name, city, website
-    FROM potential_leads
-    WHERE (website IS NULL OR website = '')
-    ORDER BY id ASC
-    LIMIT ?
-  `);
+  // website dolu + website_intel kaydı olmayan lead'ler
+  const leads = db
+    .prepare(
+      `
+      SELECT pl.id,
+             pl.company_name,
+             pl.website
+      FROM potential_leads pl
+      LEFT JOIN website_intel wi
+        ON wi.lead_id = pl.id
+      WHERE pl.website IS NOT NULL
+        AND pl.website != ''
+        AND wi.id IS NULL
+      ORDER BY pl.id ASC
+      LIMIT ?
+    `
+    )
+    .all(limit);
 
-  const leads = selectStmt.all(Number(limit) || 5);
-
-  if (!Array.isArray(leads) || leads.length === 0) {
-    log.info("[WebIntelBatch] İşlenecek lead bulunamadı.");
+  if (!leads.length) {
+    log.info("[WebIntelBatch] İşlenecek lead bulunamadı");
     return {
       ok: true,
       processedCount: 0,
       items: [],
+      note: "Website'i dolu olup website_intel kaydı olmayan lead bulunamadı.",
     };
   }
 
-  log.info("[WebIntelBatch] Batch website intel başlıyor", {
-    count: leads.length,
-    limit,
-  });
-
-  const updateStmt = db.prepare(`
-    UPDATE potential_leads
-    SET website = ?, updated_at = datetime('now')
-    WHERE id = ?
-  `);
-
   const items = [];
-
   for (const lead of leads) {
-    const { id, company_name, city } = lead;
-
-    // 1) Domain adaylarını üret (max 5 kısa URL)
-    const candidates = guessDomainsForLead(company_name, city);
-
-    if (!candidates || candidates.length === 0) {
-      log.warn("[WebIntelBatch] Domain adayı üretilemedi", {
-        id,
-        company_name,
-      });
-
-      items.push({
-        id,
-        company_name,
-        status: "no_domain_candidates",
-      });
-
-      continue;
-    }
-
-    log.info("[WebIntelBatch] Domain tahmini", {
-      leadId: id,
-      company: company_name,
-      guesses: candidates,
-    });
-
-    let chosenUrl = null;
-    let lastIntel = null;
-
-    // 2) Her domain adayını sırayla dene
-    for (const url of candidates) {
-      try {
-        const intel = await websiteIntelService.enrichWebsiteFromUrl({ url });
-        lastIntel = intel;
-
-        // Sadece gerçekten çalışan (200–399) domain'i kabul et
-        if (
-          intel.httpStatus &&
-          intel.httpStatus >= 200 &&
-          intel.httpStatus < 400
-        ) {
-          chosenUrl = url;
-          break;
-        }
-      } catch (err) {
-        log.warn(
-          "[WebIntelBatch] Website intel hatası, bir sonraki adaya geçiliyor",
-          {
-            leadId: id,
-            url,
-            error: err?.message || String(err),
-          }
-        );
-        // sıradaki adaya geç
-      }
-    }
-
-    if (chosenUrl && lastIntel) {
-      // 3) Geçerli domain'i potential_leads'e yaz
-      updateStmt.run(chosenUrl, id);
-
-      log.info("[WebIntelBatch] Lead için geçerli website bulundu", {
-        id,
-        company_name,
-        website: chosenUrl,
-        httpStatus: lastIntel.httpStatus,
-      });
-
-      // 4) AI analizini tetikle (response'a koymuyoruz, sadece log)
-      try {
-        const aiResult = await analyzeWebsiteWithAI({
-          url: chosenUrl,
-          intel: lastIntel,
-        });
-
-        log.info("[WebIntelBatchAI] Lead için AI website analizi tamamlandı", {
-          id,
-          company_name,
-          url: chosenUrl,
-          hasError: !!aiResult.ai?.parseError,
-        });
-      } catch (err) {
-        log.error("[WebIntelBatchAI] Lead için AI analiz hatası", {
-          id,
-          company_name,
-          url: chosenUrl,
-          error: err?.message || String(err),
-        });
-      }
-
-      items.push({
-        id,
-        company_name,
-        website: chosenUrl,
-        httpStatus: lastIntel.httpStatus,
-        status: "ok",
-      });
-    } else {
-      log.warn("[WebIntelBatch] Geçerli website bulunamadı", {
-        id,
-        company_name,
-      });
-
-      items.push({
-        id,
-        company_name,
-        status: "no_valid_website",
-      });
-    }
+    const result = await runWebsiteIntelForLead(lead);
+    items.push(result);
   }
 
+  const processedCount = items.length;
+
   log.info("[WebIntelBatch] Batch tamamlandı", {
-    processedCount: items.length,
+    processedCount,
   });
 
   return {
     ok: true,
-    processedCount: items.length,
+    processedCount,
     items,
   };
 }
 
 module.exports = {
   runWebsiteIntelBatch,
+  runWebsiteIntelForLead,
 };

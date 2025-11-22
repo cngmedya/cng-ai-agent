@@ -138,6 +138,37 @@ async function initLeadAcquisitionSchema() {
     );
   } catch (_) {}
 
+  // 🔹 V2 Lead Acquisition – potential_leads extra kolonları
+  try {
+    db.exec(
+      `ALTER TABLE potential_leads ADD COLUMN normalized_name TEXT;`
+    );
+  } catch (_) {}
+
+  try {
+    db.exec(
+      `ALTER TABLE potential_leads ADD COLUMN normalized_category TEXT;`
+    );
+  } catch (_) {}
+
+  try {
+    db.exec(
+      `ALTER TABLE potential_leads ADD COLUMN normalized_city TEXT;`
+    );
+  } catch (_) {}
+
+  try {
+    db.exec(
+      `ALTER TABLE potential_leads ADD COLUMN lead_quality_score INTEGER;`
+    );
+  } catch (_) {}
+
+  try {
+    db.exec(
+      `ALTER TABLE potential_leads ADD COLUMN lead_quality_notes TEXT;`
+    );
+  } catch (_) {}
+
   // 3) lead_id kolonu artık garanti olduğu için index'i ayrı yaratalım
   try {
     db.exec(`
