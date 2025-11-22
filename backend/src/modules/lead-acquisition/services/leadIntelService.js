@@ -3,119 +3,72 @@
 const { getCrmDb } = require("../../../db/db");
 const { log } = require("../../../lib/logger");
 
-/**
- * Helper: Son website_intel kaydını getir
- */
-function getLatestWebsiteIntel(db, leadId) {
-  const row = db
-    .prepare(
-      `
-      SELECT *
-      FROM website_intel
-      WHERE lead_id = ?
-      ORDER BY last_checked_at DESC, id DESC
-      LIMIT 1
-    `,
-    )
-    .get(leadId);
+// Lead list için mevcut kalite + normalizasyon mantığını kullanalım
+const { getLeadList } = require("./leadListService");
 
+/**
+ * Güvenli JSON parse helper'ı
+ */
+function safeJsonParse(str, fallback = null) {
+  if (!str) return fallback;
+  try {
+    return JSON.parse(str);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+/**
+ * website_intel satırını API'ye uygun objeye çevir
+ */
+function mapWebsiteIntelRow(row) {
   if (!row) return null;
 
-  let meta = null;
-  try {
-    meta = row.meta_json ? JSON.parse(row.meta_json) : null;
-  } catch (_) {
-    meta = null;
-  }
+  const meta = safeJsonParse(row.meta_json, null);
 
   return {
     id: row.id,
     lead_id: row.lead_id,
     url: row.url,
-    http_status: row.http_status,
+    httpStatus: row.http_status,
     title: row.title,
     description: row.description,
     meta,
     last_checked_at: row.last_checked_at,
-    error_message: row.error_message,
+    error: row.error_message || null,
   };
 }
 
 /**
- * Helper: Son search_intel kaydını getir
+ * lead_search_intel satırını API'ye uygun objeye çevir
  */
-function getLatestSearchIntel(db, leadId) {
-  const row = db
-    .prepare(
-      `
-      SELECT *
-      FROM lead_search_intel
-      WHERE lead_id = ?
-      ORDER BY last_checked_at DESC, id DESC
-      LIMIT 1
-    `,
-    )
-    .get(leadId);
-
+function mapSearchIntelRow(row) {
   if (!row) return null;
 
-  let results = [];
-  try {
-    results = row.results_json ? JSON.parse(row.results_json) : [];
-  } catch (_) {
-    results = [];
-  }
+  const results = safeJsonParse(row.results_json, []);
 
   return {
     id: row.id,
     lead_id: row.lead_id,
     query: row.query,
     engine: row.engine,
+    results,
     mentions_count: row.mentions_count,
     complaints_count: row.complaints_count,
     last_checked_at: row.last_checked_at,
     status: row.status,
-    error_message: row.error_message,
-    results,
+    error_message: row.error_message || null,
   };
 }
 
 /**
- * Helper: Son reputation kaydını getir
+ * lead_reputation_insights satırını API'ye uygun objeye çevir
  */
-function getLatestReputationInsight(db, leadId) {
-  const row = db
-    .prepare(
-      `
-      SELECT *
-      FROM lead_reputation_insights
-      WHERE lead_id = ?
-      ORDER BY last_updated_at DESC, id DESC
-      LIMIT 1
-    `,
-    )
-    .get(leadId);
-
+function mapReputationRow(row) {
   if (!row) return null;
 
-  let keyOpportunites = [];
-  let suggestedActions = [];
-
-  try {
-    keyOpportunites = row.key_opportunities_json
-      ? JSON.parse(row.key_opportunities_json)
-      : [];
-  } catch (_) {
-    keyOpportunites = [];
-  }
-
-  try {
-    suggestedActions = row.suggested_actions_json
-      ? JSON.parse(row.suggested_actions_json)
-      : [];
-  } catch (_) {
-    suggestedActions = [];
-  }
+  const keyOpportunities = safeJsonParse(row.key_opportunities_json, []);
+  const suggestedActions = safeJsonParse(row.suggested_actions_json, []);
 
   return {
     id: row.id,
@@ -127,82 +80,76 @@ function getLatestReputationInsight(db, leadId) {
     negative_ratio: row.negative_ratio,
     summary_markdown: row.summary_markdown,
     last_updated_at: row.last_updated_at,
-    key_opportunities: keyOpportunites,
+    key_opportunities: keyOpportunities,
     suggested_actions: suggestedActions,
   };
 }
 
 /**
- * Lead Quality Scoring – V1
- * 0–100 arası skor
- *
- * Basit mantık:
- *  - Reputation varsa → ana taban = reputation_score
- *  - Yoksa → website meta score varsa onu kullan
- *  - Ek bonus/kesintiler:
- *      - http_status 2xx / 3xx ise +5
- *      - SEO score >= 60 ise +5
- *      - Çok şikayet varsa (complaints_count >= 3) → -10
+ * Website kalite sınıflandırması
+ *  - score: meta.score veya meta.seo.score
+ *  - websiteQuality:
+ *      - "none"  : intel yok
+ *      - "bad"   : httpStatus yok veya 4xx/5xx
+ *      - "weak"  : score < 75
+ *      - "strong": score >= 75
  */
-function computeLeadQualityScore({ lead, websiteIntel, searchIntel, reputation }) {
-  let scoreBase = 40; // minimum taban
-
-  // 1) Reputation en önemli sinyal
-  if (reputation && typeof reputation.reputation_score === "number") {
-    scoreBase = reputation.reputation_score;
-  } else if (
-    websiteIntel &&
-    websiteIntel.meta &&
-    typeof websiteIntel.meta.score === "number"
-  ) {
-    // 2) Website meta score yedek sinyal
-    scoreBase = Math.max(scoreBase, websiteIntel.meta.score);
+function classifyWebsiteQuality(websiteIntel) {
+  if (!websiteIntel) {
+    return {
+      websiteQuality: "none",
+      websiteScore: 0,
+      websiteQualityNotes: ["Website intel bulunamadı veya henüz taranmamış."],
+    };
   }
 
-  // 3) HTTP status → site ayakta mı?
-  if (
-    websiteIntel &&
-    typeof websiteIntel.http_status === "number" &&
-    websiteIntel.http_status >= 200 &&
-    websiteIntel.http_status < 400
-  ) {
-    scoreBase += 5;
-  }
+  const notes = [];
+  const meta = websiteIntel.meta || {};
+  const seo = meta.seo || {};
+  const structure = meta.structure || {};
+  const performance = meta.performance || {};
 
-  // 4) SEO skor bonusu
-  const seoScore =
-    websiteIntel &&
-    websiteIntel.meta &&
-    websiteIntel.meta.seo &&
-    typeof websiteIntel.meta.seo.score === "number"
-      ? websiteIntel.meta.seo.score
-      : null;
-
-  if (seoScore !== null && seoScore >= 60) {
-    scoreBase += 5;
-  }
-
-  // 5) Şikayet sayısı → negatif etki
-  const complaints =
-    searchIntel && typeof searchIntel.complaints_count === "number"
-      ? searchIntel.complaints_count
+  const score = typeof meta.score === "number"
+    ? meta.score
+    : typeof seo.score === "number"
+      ? seo.score
       : 0;
 
-  if (complaints >= 3) {
-    scoreBase -= 10;
-  } else if (complaints === 2) {
-    scoreBase -= 5;
+  if (!websiteIntel.httpStatus || websiteIntel.httpStatus >= 400) {
+    notes.push("Site HTTP düzeyinde hata dönüyor veya erişilemiyor.");
   }
 
-  // 6) Basit normalizasyon
-  if (Number.isNaN(scoreBase)) scoreBase = 40;
-  scoreBase = Math.max(0, Math.min(100, Math.round(scoreBase)));
+  if (!structure.hasTitle && !websiteIntel.title) {
+    notes.push("Başlık (title) eksik veya zayıf.");
+  }
 
-  return scoreBase;
+  if (!structure.hasDescription && !websiteIntel.description) {
+    notes.push("Meta description eksik.");
+  }
+
+  if (performance.contentLength && performance.contentLength < 2000) {
+    notes.push("Site içeriği çok kısa görünüyor (muhtemelen zayıf/boş sayfa).");
+  }
+
+  let websiteQuality = "weak";
+
+  if (!websiteIntel.httpStatus || websiteIntel.httpStatus >= 400) {
+    websiteQuality = "bad";
+  } else if (score >= 75) {
+    websiteQuality = "strong";
+  } else {
+    websiteQuality = "weak";
+  }
+
+  return {
+    websiteQuality,
+    websiteScore: score,
+    websiteQualityNotes: notes,
+  };
 }
 
 /**
- * Tek bir lead için full intel (lead + website + search + reputation + quality_score)
+ * Tek bir lead için full intel (lead + website + search + reputation)
  */
 async function getLeadIntel(leadId) {
   const db = await getCrmDb();
@@ -213,119 +160,102 @@ async function getLeadIntel(leadId) {
       SELECT *
       FROM potential_leads
       WHERE id = ?
-    `,
+    `
     )
     .get(leadId);
 
-  if (!lead) return null;
+  if (!lead) {
+    return null;
+  }
 
-  const websiteIntel = getLatestWebsiteIntel(db, lead.id);
-  const searchIntel = getLatestSearchIntel(db, lead.id);
-  const reputation = getLatestReputationInsight(db, lead.id);
+  const websiteRow = db
+    .prepare(
+      `
+      SELECT *
+      FROM website_intel
+      WHERE lead_id = ?
+      ORDER BY last_checked_at DESC, id DESC
+      LIMIT 1
+    `
+    )
+    .get(leadId);
 
-  const lead_quality_score = computeLeadQualityScore({
+  const searchRow = db
+    .prepare(
+      `
+      SELECT *
+      FROM lead_search_intel
+      WHERE lead_id = ?
+      ORDER BY last_checked_at DESC, id DESC
+      LIMIT 1
+    `
+    )
+    .get(leadId);
+
+  const reputationRow = db
+    .prepare(
+      `
+      SELECT *
+      FROM lead_reputation_insights
+      WHERE lead_id = ?
+      ORDER BY last_updated_at DESC, id DESC
+      LIMIT 1
+    `
+    )
+    .get(leadId);
+
+  const websiteIntel = mapWebsiteIntelRow(websiteRow);
+  const searchIntel = mapSearchIntelRow(searchRow);
+  const reputation = mapReputationRow(reputationRow);
+
+  const qualityInfo = classifyWebsiteQuality(websiteIntel);
+
+  return {
     lead,
     websiteIntel,
     searchIntel,
     reputation,
-  });
-
-  return {
-    lead: {
-      ...lead,
-      lead_quality_score,
-    },
-    websiteIntel,
-    searchIntel,
-    reputation,
+    website_quality: qualityInfo.websiteQuality,
+    website_score: qualityInfo.websiteScore,
+    website_quality_notes: qualityInfo.websiteQualityNotes,
   };
 }
 
 /**
- * Lead listesi + inline intel snapshot
- *  - Sayfalama için page / limit parametreleri alır
- *  - Her lead için websiteIntel / reputation / searchIntel minimal snapshot + quality_score döner
- */
-async function getLeadListWithIntel({ page = 1, limit = 20 } = {}) {
-  const db = await getCrmDb();
-
-  const offset = (page - 1) * limit;
-
-  const leads = db
-    .prepare(
-      `
-      SELECT *
-      FROM potential_leads
-      ORDER BY id DESC
-      LIMIT ? OFFSET ?
-    `,
-    )
-    .all(limit, offset);
-
-  const totalRow = db.prepare(`SELECT COUNT(*) as cnt FROM potential_leads`).get();
-  const total = totalRow ? totalRow.cnt : 0;
-
-  const items = leads.map((lead) => {
-    const websiteIntel = getLatestWebsiteIntel(db, lead.id);
-    const searchIntel = getLatestSearchIntel(db, lead.id);
-    const reputation = getLatestReputationInsight(db, lead.id);
-
-    const lead_quality_score = computeLeadQualityScore({
-      lead,
-      websiteIntel,
-      searchIntel,
-      reputation,
-    });
-
-    return {
-      ...lead,
-      lead_quality_score,
-      website_intel: websiteIntel,
-      reputation,
-      search_intel: searchIntel,
-    };
-  });
-
-  return {
-    items,
-    total,
-    page,
-    limit,
-  };
-}
-
-/**
- * Dashboard summary: kaç lead var, kaçı intel / reputation almış
+ * Intel summary (dashboard sayıları)
  */
 async function getLeadIntelSummary() {
   const db = await getCrmDb();
 
-  const totalRow = db.prepare(`SELECT COUNT(*) as cnt FROM potential_leads`).get();
-  const totalLeads = totalRow ? totalRow.cnt : 0;
+  const totalLeadsRow = db
+    .prepare(`SELECT COUNT(*) as c FROM potential_leads`)
+    .get();
 
-  const withWebsiteRow = db
+  const websiteIntelRow = db
     .prepare(
       `
-      SELECT COUNT(DISTINCT lead_id) as cnt
+      SELECT COUNT(DISTINCT lead_id) as c
       FROM website_intel
-    `,
+      WHERE http_status IS NOT NULL
+    `
     )
     .get();
-  const leadsWithWebsiteIntel = withWebsiteRow ? withWebsiteRow.cnt : 0;
 
-  const withReputationRow = db
+  const reputationRow = db
     .prepare(
       `
-      SELECT COUNT(DISTINCT lead_id) as cnt
+      SELECT COUNT(DISTINCT lead_id) as c
       FROM lead_reputation_insights
-    `,
+    `
     )
     .get();
-  const leadsWithReputation = withReputationRow ? withReputationRow.cnt : 0;
 
+  const totalLeads = totalLeadsRow?.c || 0;
+  const leadsWithWebsiteIntel = websiteIntelRow?.c || 0;
+  const leadsWithReputation = reputationRow?.c || 0;
   const leadsWithoutReputation = Math.max(
     0,
-    totalLeads - leadsWithReputation,
+    totalLeads - leadsWithReputation
   );
 
   return {
@@ -336,9 +266,86 @@ async function getLeadIntelSummary() {
   };
 }
 
+/**
+ * Lead list (paged) + WebsiteIntel + SearchIntel + Reputation
+ * Burada mevcut leadListService çıktısını zenginleştiriyoruz.
+ *
+ * Input:  { page, limit }
+ * Output: { items: [...], total, page, limit }
+ */
+async function getLeadListWithIntel({ page = 1, limit = 20 } = {}) {
+  const db = await getCrmDb();
+
+  // Önce mevcut leadListService ile temel listeyi al
+  // Bu zaten: normalized_name, lead_quality_score, lead_quality_notes vs. içeriyor.
+  const base = await getLeadList({ page, limit });
+
+  const enrichedItems = [];
+
+  for (const lead of base.items) {
+    const leadId = lead.id;
+
+    const websiteRow = db
+      .prepare(
+        `
+        SELECT *
+        FROM website_intel
+        WHERE lead_id = ?
+        ORDER BY last_checked_at DESC, id DESC
+        LIMIT 1
+      `
+      )
+      .get(leadId);
+
+    const searchRow = db
+      .prepare(
+        `
+        SELECT *
+        FROM lead_search_intel
+        WHERE lead_id = ?
+        ORDER BY last_checked_at DESC, id DESC
+        LIMIT 1
+      `
+      )
+      .get(leadId);
+
+    const reputationRow = db
+      .prepare(
+        `
+        SELECT *
+        FROM lead_reputation_insights
+        WHERE lead_id = ?
+        ORDER BY last_updated_at DESC, id DESC
+        LIMIT 1
+      `
+      )
+      .get(leadId);
+
+    const websiteIntel = mapWebsiteIntelRow(websiteRow);
+    const searchIntel = mapSearchIntelRow(searchRow);
+    const reputation = mapReputationRow(reputationRow);
+
+    const qualityInfo = classifyWebsiteQuality(websiteIntel);
+
+    enrichedItems.push({
+      ...lead,
+      website_intel: websiteIntel,
+      search_intel: searchIntel,
+      reputation,
+      website_quality: qualityInfo.websiteQuality,
+      website_score: qualityInfo.websiteScore,
+      website_quality_notes: qualityInfo.websiteQualityNotes,
+    });
+  }
+
+  return {
+    ...base,
+    items: enrichedItems,
+  };
+}
+
 module.exports = {
   getLeadIntel,
   getLeadIntelSummary,
   getLeadListWithIntel,
-  computeLeadQualityScore, // ileride başka yerlerde kullanmak için export ediyoruz
 };

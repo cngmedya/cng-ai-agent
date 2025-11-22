@@ -328,10 +328,12 @@ exports.getLeadIntelSummaryController = async (req, res) => {
 // --------------------------------------------------------
 exports.getLeadListController = async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit || "50", 10);
-    const offset = parseInt(req.query.offset || "0", 10);
+    let { page, limit } = req.query;
 
-    const data = await getLeadList({ limit, offset });
+    page = parseInt(page || "1", 10);
+    limit = parseInt(limit || "20", 10);
+
+    const data = await getLeadList({ page, limit });
 
     return res.json({
       ok: true,
@@ -348,26 +350,6 @@ exports.getLeadListController = async (req, res) => {
       ok: false,
       data: null,
       error: "Lead listesi alınırken bir hata oluştu.",
-    });
-  }
-};
-
-const { getLeadListWithIntel } = require("../services/leadIntelService");
-
-exports.getLeadListController = async (req, res) => {
-  try {
-    let { page, limit } = req.query;
-
-    page = parseInt(page || "1", 10);
-    limit = parseInt(limit || "20", 10);
-
-    const data = await getLeadListWithIntel({ page, limit });
-
-    return res.json({ ok: true, data });
-  } catch (err) {
-    return res.status(500).json({
-      ok: false,
-      error: err.message,
     });
   }
 };
