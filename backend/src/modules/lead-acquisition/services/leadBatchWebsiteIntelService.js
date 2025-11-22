@@ -5,245 +5,247 @@ const { log } = require("../../../lib/logger");
 const { enrichWebsiteFromUrl } = require("./websiteIntelService");
 
 /**
- * Website kalitesini sınıflandır:
- *  - none        → site yok / ulaşılamıyor / ağır hata
- *  - placeholder → domain satış / parked / çok boş sayfa
- *  - weak        → zayıf yapı, eksik SEO / içerik
- *  - strong      → iyi yapılandırılmış, içerik ve SEO fena değil
+ * Website kalite skorunu ve basit kalite etiketini çıkar
+ *  - strong / weak / no_site / error
  */
-function classifyWebsiteQuality(intel) {
+function classifyWebsiteQualityFromIntel(intel) {
   if (!intel) {
     return {
-      quality: "none",
-      score: 0,
-      reasons: ["Website intel alınamadı."],
+      websiteQuality: "error",
+      websiteScore: 0,
+      websiteQualityNotes: ["Website intel bulunamadı."],
     };
   }
 
-  const { httpStatus, title, description, meta } = intel;
+  const httpStatus = intel.httpStatus ?? null;
+  const meta = intel.meta || {};
+  const seo = meta.seo || {};
+  const structure = meta.structure || {};
+  const performance = meta.performance || {};
 
-  // HTTP hata / ulaşılamıyor
+  const score = typeof meta.score === "number" ? meta.score : 0;
+  const notes = [];
+
+  // HTTP hata / erişilemiyor
   if (!httpStatus || httpStatus >= 400) {
+    notes.push("Website'e erişilemedi veya HTTP hatası alındı.");
     return {
-      quality: "none",
-      score: 0,
-      reasons: [
-        "Siteye ulaşılamadı veya HTTP hatası var.",
-        httpStatus ? `HTTP status: ${httpStatus}` : "HTTP status yok",
-      ],
+      websiteQuality: "no_site",
+      websiteScore: 0,
+      websiteQualityNotes: notes,
     };
   }
 
-  const reasons = [];
-  const score =
-    meta && typeof meta.score === "number" ? meta.score : null;
-
+  // Çok küçük / boş sayfa
   const contentLength =
-    meta?.performance?.contentLength ??
-    meta?.contentLength ??
-    0;
+    performance.contentLength || meta.contentLength || 0;
+  if (contentLength > 0 && contentLength < 2000) {
+    notes.push("Sayfa neredeyse boş görünüyor (çok az içerik).");
+  }
 
-  const hasTitle =
-    meta?.structure?.hasTitle ??
-    meta?.hasTitle ??
-    Boolean(title);
+  // SEO issues
+  if (seo.issues && Array.isArray(seo.issues) && seo.issues.length) {
+    notes.push(...seo.issues.slice(0, 3));
+  }
 
-  const hasDescription =
-    meta?.structure?.hasDescription ??
-    meta?.hasDescription ??
-    Boolean(description);
+  let websiteQuality = "weak";
 
-  const seoScore =
-    meta?.seo && typeof meta.seo.score === "number"
-      ? meta.seo.score
-      : null;
-
-  const titleLower = (title || "").toLowerCase();
-  const descLower = (description || "").toLowerCase();
-
-  // 1) Placeholder / domain satış / çok boş sayfa
-  if (contentLength && contentLength < 2000) {
-    if (
-      titleLower.includes("domain") ||
-      titleLower.includes("for sale") ||
-      titleLower.includes("satılık") ||
-      descLower.includes("domain") ||
-      descLower.includes("satılık")
-    ) {
-      reasons.push("Domain satış / parked sayfa gibi görünüyor.");
-      return {
-        quality: "placeholder",
-        score: score ?? seoScore ?? 30,
-        reasons,
-      };
+  if (score >= 80) {
+    websiteQuality = "strong";
+    if (!notes.length) {
+      notes.push(
+        "Başlık ve açıklama mevcut.",
+        "SEO ve içerik seviyesi makul veya iyi."
+      );
     }
-
-    if (!hasDescription) {
-      reasons.push("İçerik çok kısa ve açıklama yok.");
-      return {
-        quality: "weak",
-        score: score ?? seoScore ?? 40,
-        reasons,
-      };
+  } else if (score >= 50) {
+    websiteQuality = "weak";
+    if (!notes.length) {
+      notes.push("SEO skoru orta seviyede, iyileştirme fırsatı var.");
     }
+  } else {
+    websiteQuality = "no_site";
+    notes.push("Website çok zayıf veya neredeyse boş.");
   }
-
-  // 2) SEO / içerik zayıf ise
-  if (seoScore !== null && seoScore < 60) {
-    reasons.push("SEO skoru düşük.");
-  }
-  if (!hasDescription) {
-    reasons.push("Meta description eksik.");
-  }
-
-  if (
-    (seoScore !== null && seoScore < 60) ||
-    !hasDescription ||
-    contentLength < 10000
-  ) {
-    return {
-      quality: "weak",
-      score: score ?? seoScore ?? 55,
-      reasons: reasons.length
-        ? reasons
-        : ["Yapı ve içerik zayıf görünüyor."],
-    };
-  }
-
-  // 3) Güçlü site
-  reasons.push("Başlık ve açıklama mevcut.");
-  reasons.push("SEO ve içerik seviyesi makul veya iyi.");
 
   return {
-    quality: "strong",
-    score: score ?? seoScore ?? 80,
-    reasons,
+    websiteQuality,
+    websiteScore: score,
+    websiteQualityNotes: notes,
   };
 }
 
 /**
- * Tek bir lead için website intel çalıştır
- *  - potential_leads.website alanındaki URL'i kullanır
- *  - enrichWebsiteFromUrl ile intel alır
- *  - website_intel tablosuna yazma işlemi enrichWebsiteFromUrl içinde
+ * Website opportunity (satılabilir fırsat) sınıflandırması
+ *
+ * type:
+ *  - brand_new_website  → domain var ama site yok / boş / parked / coming soon
+ *  - website_rebuild    → site var ama kötü / zayıf / güncellenmeye muhtaç
+ *  - seo_content_upgrade→ site iyi ama SEO & içerik tarafında upgrade fırsatı
+ *  - high_quality       → çok iyi site (daha çok reklam / scale fırsatı)
  */
-async function runWebsiteIntelForLead(lead) {
-  const { id, company_name, website } = lead;
+function classifyWebsiteOpportunityFromIntel(intel, websiteQuality) {
+  const notes = [];
 
-  if (!website) {
-    log.warn("[WebIntelBatch] Website boş, lead atlandı", {
-      id,
-      company_name,
-    });
+  if (!intel) {
     return {
-      leadId: id,
-      companyName: company_name,
-      website: null,
-      status: "no_website",
-      httpStatus: null,
-      websiteQuality: "none",
-      websiteScore: 0,
-      websiteQualityNotes: ["Lead kaydında website bulunmuyor."],
-      intel: null,
+      opportunityType: "brand_new_website",
+      opportunityNotes: [
+        "Website bulunamadı, domain veya hosting tarafında sorun olabilir.",
+      ],
     };
   }
 
-  // Website alanı http(s) ile başlamıyorsa başına https:// ekleyelim
-  let url = website.trim();
-  if (!/^https?:\/\//i.test(url)) {
-    url = `https://${url.replace(/^\/+/, "")}`;
+  const httpStatus = intel.httpStatus ?? null;
+  const meta = intel.meta || {};
+  const seo = meta.seo || {};
+  const structure = meta.structure || {};
+  const performance = meta.performance || {};
+
+  const title = (intel.title || "").toLowerCase();
+  const desc = (intel.description || "").toLowerCase();
+  const fullText = `${title} ${desc}`;
+
+  const contentLength =
+    performance.contentLength || meta.contentLength || 0;
+
+  // 1) HTTP erişim hatası → brand_new_website fırsatı
+  if (!httpStatus || httpStatus >= 400) {
+    notes.push(
+      "Website şu an erişilemiyor veya HTTP hatası veriyor. Domain aktif ama site çalışmıyor olabilir."
+    );
+    return {
+      opportunityType: "brand_new_website",
+      opportunityNotes: notes,
+    };
   }
 
-  log.info("[WebIntelBatch] Website analiz başlıyor", {
-    leadId: id,
-    companyName: company_name,
-    url,
-  });
+  // 2) Domain parked / for sale
+  if (
+    /domain for sale|this domain is for sale|professional domain sales|satılık domain|satilik domain/.test(
+      fullText
+    )
+  ) {
+    notes.push(
+      "Domain satış sayfası görünüyor. Aktif website tasarımı yok."
+    );
+    return {
+      opportunityType: "brand_new_website",
+      opportunityNotes: notes,
+    };
+  }
 
-  try {
-    const intel = await enrichWebsiteFromUrl({
-      url,
-      leadId: id,
-    });
+  // 3) Coming soon / yapım aşamasında
+  if (
+    /coming soon|under construction|yapım aşamasında|yapim aşamasinda|hazırlanıyor|hazirlaniyor|construction/.test(
+      fullText
+    )
+  ) {
+    notes.push(
+      "Website 'coming soon' / 'yapım aşamasında' gibi görünüyor."
+    );
+    return {
+      opportunityType: "brand_new_website",
+      opportunityNotes: notes,
+    };
+  }
 
-    const httpStatus =
-      intel && typeof intel.httpStatus === "number"
-        ? intel.httpStatus
-        : intel?.httpStatus ?? null;
+  // 4) Çok az içerik → brand_new_website fırsatı
+  if (contentLength > 0 && contentLength < 1000) {
+    notes.push(
+      "Domain var ama sayfa neredeyse boş. Yeni website tasarımı için güçlü fırsat."
+    );
+    return {
+      opportunityType: "brand_new_website",
+      opportunityNotes: notes,
+    };
+  }
 
-    let status = "ok";
+  // 5) Website quality'e göre fırsat türü
+  if (websiteQuality === "no_site") {
+    notes.push(
+      "Website çok zayıf veya yok gibi. Baştan web sitesi tasarımı için uygun aday."
+    );
+    return {
+      opportunityType: "brand_new_website",
+      opportunityNotes: notes,
+    };
+  }
 
-    if (!intel) {
-      status = "error_unknown";
-    } else if (!httpStatus || httpStatus >= 400) {
-      status = "error_status";
+  if (websiteQuality === "weak") {
+    // zayıf site → rebuild fırsatı
+    if (!structure.hasTitle || !structure.hasDescription) {
+      notes.push(
+        "Başlık / açıklama eksik, tasarım & içerik tarafında ciddi iyileştirme fırsatı var."
+      );
+    }
+    if (seo.issues && seo.issues.length) {
+      notes.push("SEO tarafında önemli eksikler mevcut.");
+    }
+    if (!notes.length) {
+      notes.push(
+        "Website var ama zayıf görünüyor. Baştan tasarım / revizyon için uygun aday."
+      );
     }
 
-    const { quality, score, reasons } = classifyWebsiteQuality(intel);
-
     return {
-      leadId: id,
-      companyName: company_name,
-      website: intel?.url || url,
-      status,
-      httpStatus,
-      websiteQuality: quality,
-      websiteScore: score,
-      websiteQualityNotes: reasons,
-      intel,
-    };
-  } catch (err) {
-    log.warn("[WebIntelBatch] Website intel hatası", {
-      leadId: id,
-      companyName: company_name,
-      url,
-      error: err.message,
-    });
-
-    return {
-      leadId: id,
-      companyName: company_name,
-      website: url,
-      status: "error_exception",
-      httpStatus: null,
-      websiteQuality: "none",
-      websiteScore: 0,
-      websiteQualityNotes: [
-        "Website intel sırasında exception oluştu.",
-        err.message,
-      ],
-      intel: null,
+      opportunityType: "website_rebuild",
+      opportunityNotes: notes,
     };
   }
+
+  // websiteQuality === "strong"
+  if (websiteQuality === "strong") {
+    if (seo.issues && seo.issues.length) {
+      notes.push(
+        "Website iyi durumda fakat SEO & içerik tarafında upgrade fırsatları var."
+      );
+      notes.push(...seo.issues.slice(0, 3));
+      return {
+        opportunityType: "seo_content_upgrade",
+        opportunityNotes: notes,
+      };
+    }
+
+    notes.push(
+      "Website güçlü görünüyor. Reklam, performans ve ölçeklendirme odaklı teklif için uygun."
+    );
+    return {
+      opportunityType: "high_quality",
+      opportunityNotes: notes,
+    };
+  }
+
+  // Fallback
+  notes.push("Website iyileştirme potansiyeli taşıyor.");
+  return {
+    opportunityType: "website_rebuild",
+    opportunityNotes: notes,
+  };
 }
 
 /**
- * Batch website intel:
- *  - website alanı dolu olan
- *  - ve henüz website_intel kaydı olmayan lead'leri seçer
- *  - her biri için runWebsiteIntelForLead çalıştırır
+ * WEBSITE INTEL BATCH
+ *  - potential_leads tablosunda website'i olan lead'leri alır
+ *  - enrichWebsiteFromUrl ile website intel çeker + DB'ye kaydeder
+ *  - kalite (websiteQuality) + fırsat (websiteOpportunity) üretir
  */
 async function runWebsiteIntelBatch({ limit = 10 } = {}) {
   const db = await getCrmDb();
 
-  // Henüz website_intel çalışmamış lead'ler
   const leads = db
     .prepare(
       `
-      SELECT pl.id, pl.company_name, pl.website
-      FROM potential_leads pl
-      LEFT JOIN website_intel wi ON wi.lead_id = pl.id
-      WHERE pl.website IS NOT NULL
-        AND pl.website != ''
-        AND wi.id IS NULL
-      ORDER BY pl.id ASC
+      SELECT id, company_name, website
+      FROM potential_leads
+      WHERE website IS NOT NULL AND website != ''
+      ORDER BY id ASC
       LIMIT ?
     `
     )
     .all(limit);
 
   if (!leads.length) {
-    log.info("[WebIntelBatch] İşlenecek lead bulunamadı.");
     return {
       ok: true,
       processedCount: 0,
@@ -251,16 +253,100 @@ async function runWebsiteIntelBatch({ limit = 10 } = {}) {
     };
   }
 
-  log.info("[WebIntelBatch] Batch website intel başlıyor", {
-    count: leads.length,
-    limit,
-  });
-
   const items = [];
 
   for (const lead of leads) {
-    const item = await runWebsiteIntelForLead(lead);
-    items.push(item);
+    const website = (lead.website || "").trim();
+
+    if (!website) {
+      items.push({
+        leadId: lead.id,
+        companyName: lead.company_name,
+        website: null,
+        status: "no_website",
+        httpStatus: null,
+        websiteQuality: "no_site",
+        websiteScore: 0,
+        websiteQualityNotes: ["Lead kaydında website alanı boş."],
+        websiteOpportunityType: "brand_new_website",
+        websiteOpportunityNotes: [
+          "Website alanı boş. Sıfırdan web sitesi tasarımı için ideal aday.",
+        ],
+        intel: null,
+      });
+      continue;
+    }
+
+    try {
+      const intel = await enrichWebsiteFromUrl({
+        url: website,
+        leadId: lead.id,
+      });
+
+      const {
+        websiteQuality,
+        websiteScore,
+        websiteQualityNotes,
+      } = classifyWebsiteQualityFromIntel(intel);
+
+      const {
+        opportunityType,
+        opportunityNotes,
+      } = classifyWebsiteOpportunityFromIntel(intel, websiteQuality);
+
+      const status =
+        typeof intel.httpStatus === "number" &&
+        intel.httpStatus >= 200 &&
+        intel.httpStatus < 400
+          ? "ok"
+          : "error_status";
+
+      items.push({
+        leadId: lead.id,
+        companyName: lead.company_name,
+        website,
+        status,
+        httpStatus: intel.httpStatus ?? null,
+        websiteQuality,
+        websiteScore,
+        websiteQualityNotes,
+        websiteOpportunityType: opportunityType,
+        websiteOpportunityNotes: opportunityNotes,
+        intel,
+      });
+    } catch (err) {
+      log.warn("[WebIntelBatch] Website intel hata", {
+        leadId: lead.id,
+        companyName: lead.company_name,
+        website,
+        error: err.message,
+      });
+
+      items.push({
+        leadId: lead.id,
+        companyName: lead.company_name,
+        website,
+        status: "error_fetch",
+        httpStatus: null,
+        websiteQuality: "error",
+        websiteScore: 0,
+        websiteQualityNotes: [
+          "Website taranırken teknik bir hata oluştu.",
+        ],
+        websiteOpportunityType: "brand_new_website",
+        websiteOpportunityNotes: [
+          "Website'e erişilemedi, domain veya hosting problemi olabilir.",
+        ],
+        intel: {
+          url: website,
+          httpStatus: null,
+          title: null,
+          description: null,
+          meta: null,
+          error: err.message,
+        },
+      });
+    }
   }
 
   log.info("[WebIntelBatch] Batch tamamlandı", {
