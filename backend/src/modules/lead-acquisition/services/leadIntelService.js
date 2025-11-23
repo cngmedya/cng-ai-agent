@@ -1,5 +1,3 @@
-// backend/src/modules/lead-acquisition/services/leadIntelService.js
-
 "use strict";
 
 const { getCrmDb } = require("../../../db/db");
@@ -390,6 +388,19 @@ async function getLeadListWithIntel({ page = 1, limit = 20 }) {
       websiteOpportunityType = websiteIntel.websiteOpportunityType;
     }
 
+    // Reputation'dan convenience field'lar
+    let reputationScore = null;
+    let reputationRiskLevel = null;
+    let reputationPositiveRatio = null;
+    let reputationNegativeRatio = null;
+
+    if (reputation) {
+      reputationScore = reputation.reputationScore;
+      reputationRiskLevel = reputation.riskLevel;
+      reputationPositiveRatio = reputation.positiveRatio;
+      reputationNegativeRatio = reputation.negativeRatio;
+    }
+
     return {
       ...row,
       website_intel: websiteIntel,
@@ -398,6 +409,10 @@ async function getLeadListWithIntel({ page = 1, limit = 20 }) {
       website_score: websiteScore,
       website_quality: websiteQuality,
       website_opportunity_type: websiteOpportunityType,
+      reputation_score: reputationScore,
+      reputation_risk_level: reputationRiskLevel,
+      reputation_positive_ratio: reputationPositiveRatio,
+      reputation_negative_ratio: reputationNegativeRatio,
     };
   });
 
