@@ -7,10 +7,12 @@ const websiteIntelService = require("../services/websiteIntelService");
 const websiteAiAnalysisService = require("../services/websiteAiAnalysisService");
 const { runWebsiteIntelBatch } = require("../services/leadBatchWebsiteIntelService");
 const { runDomainDiscoveryBatch } = require("../services/leadDomainDiscoveryService");
-const { getLeadList } = require("../services/leadListService");
+
+// Lead list + intel + website score vs.
 const {
   getLeadIntel,
   getLeadIntelSummary,
+  getLeadListWithIntel,
 } = require("../services/leadIntelService");
 
 const { runReputationIntelForLead } = require("../services/leadReputationOrchestrator");
@@ -126,7 +128,7 @@ exports.runWebsiteIntelBatchForLeads = async (req, res) => {
 };
 
 // --------------------------------------------------------
-// AI Website Analizi (şimdilik dev util, istersen kullanırız)
+// AI Website Analizi (dev util)
 // --------------------------------------------------------
 exports.analyzeWebsiteWithAI = async (req, res) => {
   try {
@@ -333,7 +335,8 @@ exports.getLeadListController = async (req, res) => {
     page = parseInt(page || "1", 10);
     limit = parseInt(limit || "20", 10);
 
-    const data = await getLeadList({ page, limit });
+    // 🔥 Enriched list: website_intel + search_intel + reputation + website_score vs.
+    const data = await getLeadListWithIntel({ page, limit });
 
     return res.json({
       ok: true,

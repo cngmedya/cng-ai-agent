@@ -1,150 +1,217 @@
 // backend/src/modules/lead-acquisition/services/leadIntelService.js
 
+"use strict";
+
 const { getCrmDb } = require("../../../db/db");
 const { log } = require("../../../lib/logger");
 
-// Lead list için mevcut kalite + normalizasyon mantığını kullanalım
+// Lead list + base quality skorları buradan geliyor
 const { getLeadList } = require("./leadListService");
 
 /**
- * Güvenli JSON parse helper'ı
+ * Website intel'den kalite ve fırsat sınıflandırması üretir
+ *
+ * Dönüş:
+ *  - websiteScore: 0–100
+ *  - websiteQuality: no_site | weak | medium | strong
+ *  - websiteQualityNotes: string[]
+ *  - websiteOpportunityType: brand_new_website | website_rebuild | seo_content_upgrade | high_quality
+ *  - websiteOpportunityNotes: string[]
  */
-function safeJsonParse(str, fallback = null) {
-  if (!str) return fallback;
-  try {
-    return JSON.parse(str);
-  } catch (_) {
-    return fallback;
+function classifyWebsiteForLead(intel) {
+  // Hiç site yok / httpStatus problemli
+  if (
+    !intel ||
+    !intel.httpStatus ||
+    intel.httpStatus < 200 ||
+    intel.httpStatus >= 400
+  ) {
+    return {
+      websiteScore: 0,
+      websiteQuality: "no_site",
+      websiteQualityNotes: [
+        "Website'e erişilemedi veya HTTP hatası alındı.",
+      ],
+      websiteOpportunityType: "brand_new_website",
+      websiteOpportunityNotes: [
+        "Website şu an erişilemiyor veya HTTP hatası veriyor. Domain aktif ama site çalışmıyor olabilir.",
+      ],
+    };
   }
+
+  const meta = intel.meta || {};
+  const seo = meta.seo || {};
+  const structure = meta.structure || {};
+
+  const seoScore =
+    typeof seo.score === "number" ? seo.score : 0;
+  const metaScore =
+    typeof meta.score === "number" ? meta.score : seoScore;
+
+  const hasTitle = !!structure.hasTitle;
+  const hasDescription = !!structure.hasDescription;
+
+  const websiteQualityNotes = [];
+  const websiteOpportunityNotes = [];
+
+  if (!hasTitle || !hasDescription) {
+    websiteQualityNotes.push("Başlık veya açıklama eksik.");
+  }
+
+  if (Array.isArray(seo.issues) && seo.issues.length > 0) {
+    websiteOpportunityNotes.push(...seo.issues);
+  }
+
+  let websiteQuality = "medium";
+  let websiteOpportunityType = "seo_content_upgrade";
+
+  if (seoScore < 50 || !hasTitle || !hasDescription) {
+    websiteQuality = "weak";
+    websiteOpportunityType = "website_rebuild";
+
+    websiteOpportunityNotes.unshift(
+      "Başlık / açıklama eksik, tasarım & içerik tarafında ciddi iyileştirme fırsatı var.",
+      "SEO tarafında önemli eksikler mevcut."
+    );
+  } else if (seoScore >= 80) {
+    websiteQuality = "strong";
+
+    if (seo.issues && seo.issues.length > 0) {
+      websiteOpportunityType = "seo_content_upgrade";
+      websiteOpportunityNotes.unshift(
+        "Website iyi durumda fakat SEO & içerik tarafında upgrade fırsatları var."
+      );
+    } else {
+      websiteOpportunityType = "high_quality";
+      websiteOpportunityNotes.unshift(
+        "Website güçlü görünüyor. Reklam, performans ve ölçeklendirme odaklı teklif için uygun."
+      );
+    }
+  } else {
+    websiteQuality = "medium";
+    websiteOpportunityType = "seo_content_upgrade";
+    websiteOpportunityNotes.unshift(
+      "Website ortalama seviyede, SEO ve içerik tarafında iyileştirme fırsatları var."
+    );
+  }
+
+  // duplicate notları temizle
+  const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
+
+  return {
+    websiteScore: metaScore,
+    websiteQuality,
+    websiteQualityNotes: uniq(websiteQualityNotes),
+    websiteOpportunityType,
+    websiteOpportunityNotes: uniq(websiteOpportunityNotes),
+  };
 }
 
 /**
- * website_intel satırını API'ye uygun objeye çevir
+ * DB satırını typed website_intel objesine çevir
  */
-function mapWebsiteIntelRow(row) {
+function buildWebsiteIntelFromRow(row) {
   if (!row) return null;
 
-  const meta = safeJsonParse(row.meta_json, null);
+  let meta = null;
+  if (row.meta_json) {
+    try {
+      meta = JSON.parse(row.meta_json);
+    } catch (e) {
+      meta = null;
+    }
+  }
 
-  return {
+  const base = {
     id: row.id,
-    lead_id: row.lead_id,
+    leadId: row.lead_id || null,
     url: row.url,
     httpStatus: row.http_status,
     title: row.title,
     description: row.description,
     meta,
-    last_checked_at: row.last_checked_at,
+    lastCheckedAt: row.last_checked_at || null,
+    error: row.error_message || null,
+  };
+
+  const classification = classifyWebsiteForLead(base);
+
+  return {
+    ...base,
+    websiteScore: classification.websiteScore,
+    websiteQuality: classification.websiteQuality,
+    websiteQualityNotes: classification.websiteQualityNotes,
+    websiteOpportunityType: classification.websiteOpportunityType,
+    websiteOpportunityNotes: classification.websiteOpportunityNotes,
+  };
+}
+
+/**
+ * DB satırını typed search_intel objesine çevir
+ */
+function buildSearchIntelFromRow(row) {
+  if (!row) return null;
+
+  let results = null;
+  if (row.results_json) {
+    try {
+      results = JSON.parse(row.results_json);
+    } catch (e) {
+      results = null;
+    }
+  }
+
+  return {
+    id: row.id,
+    leadId: row.lead_id,
+    query: row.query,
+    engine: row.engine,
+    results,
+    mentionsCount: row.mentions_count,
+    complaintsCount: row.complaints_count,
+    lastCheckedAt: row.last_checked_at || null,
+    status: row.status || null,
     error: row.error_message || null,
   };
 }
 
 /**
- * lead_search_intel satırını API'ye uygun objeye çevir
+ * DB satırını typed reputation objesine çevir
  */
-function mapSearchIntelRow(row) {
+function buildReputationFromRow(row) {
   if (!row) return null;
 
-  const results = safeJsonParse(row.results_json, []);
+  let keyOpportunities = null;
+  let suggestedActions = null;
+
+  if (row.key_opportunities_json) {
+    try {
+      keyOpportunities = JSON.parse(row.key_opportunities_json);
+    } catch (_) {
+      keyOpportunities = null;
+    }
+  }
+
+  if (row.suggested_actions_json) {
+    try {
+      suggestedActions = JSON.parse(row.suggested_actions_json);
+    } catch (_) {
+      suggestedActions = null;
+    }
+  }
 
   return {
     id: row.id,
-    lead_id: row.lead_id,
-    query: row.query,
-    engine: row.engine,
-    results,
-    mentions_count: row.mentions_count,
-    complaints_count: row.complaints_count,
-    last_checked_at: row.last_checked_at,
-    status: row.status,
-    error_message: row.error_message || null,
-  };
-}
-
-/**
- * lead_reputation_insights satırını API'ye uygun objeye çevir
- */
-function mapReputationRow(row) {
-  if (!row) return null;
-
-  const keyOpportunities = safeJsonParse(row.key_opportunities_json, []);
-  const suggestedActions = safeJsonParse(row.suggested_actions_json, []);
-
-  return {
-    id: row.id,
-    lead_id: row.lead_id,
-    search_intel_id: row.search_intel_id,
-    reputation_score: row.reputation_score,
-    risk_level: row.risk_level,
-    positive_ratio: row.positive_ratio,
-    negative_ratio: row.negative_ratio,
-    summary_markdown: row.summary_markdown,
-    last_updated_at: row.last_updated_at,
-    key_opportunities: keyOpportunities,
-    suggested_actions: suggestedActions,
-  };
-}
-
-/**
- * Website kalite sınıflandırması
- *  - score: meta.score veya meta.seo.score
- *  - websiteQuality:
- *      - "none"  : intel yok
- *      - "bad"   : httpStatus yok veya 4xx/5xx
- *      - "weak"  : score < 75
- *      - "strong": score >= 75
- */
-function classifyWebsiteQuality(websiteIntel) {
-  if (!websiteIntel) {
-    return {
-      websiteQuality: "none",
-      websiteScore: 0,
-      websiteQualityNotes: ["Website intel bulunamadı veya henüz taranmamış."],
-    };
-  }
-
-  const notes = [];
-  const meta = websiteIntel.meta || {};
-  const seo = meta.seo || {};
-  const structure = meta.structure || {};
-  const performance = meta.performance || {};
-
-  const score = typeof meta.score === "number"
-    ? meta.score
-    : typeof seo.score === "number"
-      ? seo.score
-      : 0;
-
-  if (!websiteIntel.httpStatus || websiteIntel.httpStatus >= 400) {
-    notes.push("Site HTTP düzeyinde hata dönüyor veya erişilemiyor.");
-  }
-
-  if (!structure.hasTitle && !websiteIntel.title) {
-    notes.push("Başlık (title) eksik veya zayıf.");
-  }
-
-  if (!structure.hasDescription && !websiteIntel.description) {
-    notes.push("Meta description eksik.");
-  }
-
-  if (performance.contentLength && performance.contentLength < 2000) {
-    notes.push("Site içeriği çok kısa görünüyor (muhtemelen zayıf/boş sayfa).");
-  }
-
-  let websiteQuality = "weak";
-
-  if (!websiteIntel.httpStatus || websiteIntel.httpStatus >= 400) {
-    websiteQuality = "bad";
-  } else if (score >= 75) {
-    websiteQuality = "strong";
-  } else {
-    websiteQuality = "weak";
-  }
-
-  return {
-    websiteQuality,
-    websiteScore: score,
-    websiteQualityNotes: notes,
+    leadId: row.lead_id,
+    searchIntelId: row.search_intel_id || null,
+    reputationScore: row.reputation_score,
+    riskLevel: row.risk_level,
+    positiveRatio: row.positive_ratio,
+    negativeRatio: row.negative_ratio,
+    summaryMarkdown: row.summary_markdown,
+    keyOpportunities,
+    suggestedActions,
+    lastUpdatedAt: row.last_updated_at || null,
   };
 }
 
@@ -204,20 +271,15 @@ async function getLeadIntel(leadId) {
     )
     .get(leadId);
 
-  const websiteIntel = mapWebsiteIntelRow(websiteRow);
-  const searchIntel = mapSearchIntelRow(searchRow);
-  const reputation = mapReputationRow(reputationRow);
-
-  const qualityInfo = classifyWebsiteQuality(websiteIntel);
+  const websiteIntel = buildWebsiteIntelFromRow(websiteRow);
+  const searchIntel = buildSearchIntelFromRow(searchRow);
+  const reputation = buildReputationFromRow(reputationRow);
 
   return {
     lead,
     websiteIntel,
     searchIntel,
     reputation,
-    website_quality: qualityInfo.websiteQuality,
-    website_score: qualityInfo.websiteScore,
-    website_quality_notes: qualityInfo.websiteQualityNotes,
   };
 }
 
@@ -228,31 +290,31 @@ async function getLeadIntelSummary() {
   const db = await getCrmDb();
 
   const totalLeadsRow = db
-    .prepare(`SELECT COUNT(*) as c FROM potential_leads`)
+    .prepare(`SELECT COUNT(*) AS c FROM potential_leads`)
     .get();
+  const totalLeads = totalLeadsRow.c || 0;
 
-  const websiteIntelRow = db
+  const leadsWithWebsiteRow = db
     .prepare(
       `
-      SELECT COUNT(DISTINCT lead_id) as c
+      SELECT COUNT(DISTINCT lead_id) AS c
       FROM website_intel
-      WHERE http_status IS NOT NULL
+      WHERE http_status BETWEEN 200 AND 399
     `
     )
     .get();
+  const leadsWithWebsiteIntel = leadsWithWebsiteRow.c || 0;
 
-  const reputationRow = db
+  const leadsWithReputationRow = db
     .prepare(
       `
-      SELECT COUNT(DISTINCT lead_id) as c
+      SELECT COUNT(DISTINCT lead_id) AS c
       FROM lead_reputation_insights
     `
     )
     .get();
+  const leadsWithReputation = leadsWithReputationRow.c || 0;
 
-  const totalLeads = totalLeadsRow?.c || 0;
-  const leadsWithWebsiteIntel = websiteIntelRow?.c || 0;
-  const leadsWithReputation = reputationRow?.c || 0;
   const leadsWithoutReputation = Math.max(
     0,
     totalLeads - leadsWithReputation
@@ -267,76 +329,77 @@ async function getLeadIntelSummary() {
 }
 
 /**
- * Lead list (paged) + WebsiteIntel + SearchIntel + Reputation
- * Burada mevcut leadListService çıktısını zenginleştiriyoruz.
+ * Lead listesi (paged) + website/search/reputation intel birleşmiş hali
  *
- * Input:  { page, limit }
- * Output: { items: [...], total, page, limit }
+ * Not: base list + quality skorları leadListService.getLeadList'ten geliyor.
  */
-async function getLeadListWithIntel({ page = 1, limit = 20 } = {}) {
+async function getLeadListWithIntel({ page = 1, limit = 20 }) {
   const db = await getCrmDb();
 
-  // Önce mevcut leadListService ile temel listeyi al
-  // Bu zaten: normalized_name, lead_quality_score, lead_quality_notes vs. içeriyor.
+  // Base list (normalized_name, lead_quality_score vs.)
   const base = await getLeadList({ page, limit });
+  const items = base.items || [];
 
-  const enrichedItems = [];
+  const websiteStmt = db.prepare(
+    `
+    SELECT *
+    FROM website_intel
+    WHERE lead_id = ?
+    ORDER BY last_checked_at DESC, id DESC
+    LIMIT 1
+  `
+  );
 
-  for (const lead of base.items) {
-    const leadId = lead.id;
+  const searchStmt = db.prepare(
+    `
+    SELECT *
+    FROM lead_search_intel
+    WHERE lead_id = ?
+    ORDER BY last_checked_at DESC, id DESC
+    LIMIT 1
+  `
+  );
 
-    const websiteRow = db
-      .prepare(
-        `
-        SELECT *
-        FROM website_intel
-        WHERE lead_id = ?
-        ORDER BY last_checked_at DESC, id DESC
-        LIMIT 1
-      `
-      )
-      .get(leadId);
+  const reputationStmt = db.prepare(
+    `
+    SELECT *
+    FROM lead_reputation_insights
+    WHERE lead_id = ?
+    ORDER BY last_updated_at DESC, id DESC
+    LIMIT 1
+  `
+  );
 
-    const searchRow = db
-      .prepare(
-        `
-        SELECT *
-        FROM lead_search_intel
-        WHERE lead_id = ?
-        ORDER BY last_checked_at DESC, id DESC
-        LIMIT 1
-      `
-      )
-      .get(leadId);
+  const enrichedItems = items.map((row) => {
+    const websiteRow = websiteStmt.get(row.id);
+    const searchRow = searchStmt.get(row.id);
+    const reputationRow = reputationStmt.get(row.id);
 
-    const reputationRow = db
-      .prepare(
-        `
-        SELECT *
-        FROM lead_reputation_insights
-        WHERE lead_id = ?
-        ORDER BY last_updated_at DESC, id DESC
-        LIMIT 1
-      `
-      )
-      .get(leadId);
+    const websiteIntel = buildWebsiteIntelFromRow(websiteRow);
+    const searchIntel = buildSearchIntelFromRow(searchRow);
+    const reputation = buildReputationFromRow(reputationRow);
 
-    const websiteIntel = mapWebsiteIntelRow(websiteRow);
-    const searchIntel = mapSearchIntelRow(searchRow);
-    const reputation = mapReputationRow(reputationRow);
+    // Website intel'den convenience field'lar
+    let websiteScore = null;
+    let websiteQuality = null;
+    let websiteOpportunityType = null;
 
-    const qualityInfo = classifyWebsiteQuality(websiteIntel);
+    if (websiteIntel) {
+      websiteScore = websiteIntel.websiteScore;
+      websiteQuality = websiteIntel.websiteQuality;
+      websiteOpportunityType = websiteIntel.websiteOpportunityType;
+    }
 
-    enrichedItems.push({
-      ...lead,
+    return {
+      ...row,
       website_intel: websiteIntel,
       search_intel: searchIntel,
       reputation,
-      website_quality: qualityInfo.websiteQuality,
-      website_score: qualityInfo.websiteScore,
-      website_quality_notes: qualityInfo.websiteQualityNotes,
-    });
-  }
+      website_score: websiteScore,
+      website_quality: websiteQuality,
+      website_opportunity_type: websiteOpportunityType,
+    };
+  });
 
   return {
     ...base,
