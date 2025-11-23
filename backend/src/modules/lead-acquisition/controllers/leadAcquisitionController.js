@@ -7,6 +7,9 @@ const websiteIntelService = require("../services/websiteIntelService");
 const websiteAiAnalysisService = require("../services/websiteAiAnalysisService");
 const { runWebsiteIntelBatch } = require("../services/leadBatchWebsiteIntelService");
 const { runDomainDiscoveryBatch } = require("../services/leadDomainDiscoveryService");
+const {
+  runReputationIntelBatchForLeads,
+} = require("../services/leadReputationBatchService");
 
 // Lead list + intel + website score vs.
 const {
@@ -203,57 +206,11 @@ exports.runReputationIntelBatchForLeads = async (req, res) => {
   const { limit = 5 } = req.body || {};
 
   try {
-    const db = await getCrmDb();
-
-    const rows = db
-      .prepare(
-        `
-        SELECT pl.id, pl.company_name
-        FROM potential_leads pl
-        LEFT JOIN lead_reputation_insights lri ON lri.lead_id = pl.id
-        WHERE lri.id IS NULL
-        ORDER BY pl.id ASC
-        LIMIT ?
-      `
-      )
-      .all(limit);
-
-    if (!rows.length) {
-      return res.json({
-        ok: true,
-        data: {
-          processedCount: 0,
-          items: [],
-          note: "Reputation intel bekleyen lead bulunamadı.",
-        },
-        error: null,
-      });
-    }
-
-    const items = [];
-
-    for (const row of rows) {
-      const result = await runReputationIntelForLead(row.id);
-
-      items.push({
-        leadId: row.id,
-        companyName: row.company_name,
-        ok: result.ok,
-        reputation_score: result.reputation_score || null,
-        risk_level: result.risk_level || null,
-      });
-    }
-
-    log.info("[ReputationBatch] Batch tamamlandı", {
-      processedCount: items.length,
-    });
+    const result = await runReputationIntelBatchForLeads({ limit });
 
     return res.json({
       ok: true,
-      data: {
-        processedCount: items.length,
-        items,
-      },
+      data: result,
       error: null,
     });
   } catch (err) {
