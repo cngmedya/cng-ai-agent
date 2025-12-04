@@ -1,0 +1,26 @@
+{
+  "name": "cng-ai-agent-backend-v2",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "migrate:old-leads": "node src/jobs/migrateOldLeads.js",
+    "migrate:add-ai-columns": "node src/jobs/migrate_add_ai_columns.js",
+    "migrate:cir": "node src/jobs/migrate_add_cir_support.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.13.2",
+    "better-sqlite3": "^12.4.1",
+    "cheerio": "^1.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "openai": "^6.9.1"
+  }
+}
