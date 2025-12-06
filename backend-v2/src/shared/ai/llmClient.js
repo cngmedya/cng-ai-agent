@@ -1,14 +1,4 @@
 // backend-v2/src/shared/ai/llmClient.js
-//
-// Tek sorumluluk:
-// - LLM'den JSON güvenli şekilde almak (chatJson)
-// - Metin cevabı gerektiğinde basit chat fonksiyonu (chat)
-//
-// Özellikler:
-// - response_format: { type: 'json_object' } kullanır
-// - ```json ... ``` code block içinden JSON'ı almayı dener
-// - JSON içinde fazladan metin varsa { ... } aralığını kesip parse eder
-// - Parse edilemezse anlamlı ve kısaltılmış hata mesajı üretir
 
 const OpenAI = require('openai');
 
@@ -19,18 +9,13 @@ const client = new OpenAI({
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
 /**
- * Genel chat (saf text) – ihtiyaç duyulursa kullanılabilecek basit helper.
+ * Basic text chat
  */
 async function chat({ system, user, model = DEFAULT_MODEL }) {
   const messages = [];
 
-  if (system) {
-    messages.push({ role: 'system', content: system });
-  }
-
-  if (user) {
-    messages.push({ role: 'user', content: user });
-  }
+  if (system) messages.push({ role: 'system', content: system });
+  if (user) messages.push({ role: 'user', content: user });
 
   const completion = await client.chat.completions.create({
     model,
@@ -42,75 +27,62 @@ async function chat({ system, user, model = DEFAULT_MODEL }) {
 }
 
 /**
- * JSON garantili chat
- *
- * Örn:
- * const result = await chatJson({ system: '...', user: JSON.stringify(payload) });
+ * JSON guaranteed chat
+ * return { ok: true, json, raw }
  */
 async function chatJson({ system, user, model = DEFAULT_MODEL }) {
   const messages = [];
 
-  if (system) {
-    messages.push({ role: 'system', content: system });
-  }
-
-  if (user) {
-    messages.push({ role: 'user', content: user });
-  }
+  if (system) messages.push({ role: 'system', content: system });
+  if (user) messages.push({ role: 'user', content: user });
 
   const completion = await client.chat.completions.create({
     model,
     messages,
-    // Modeli direkt JSON dönmeye zorluyoruz
     response_format: { type: 'json_object' }
   });
 
   const raw = completion.choices?.[0]?.message?.content?.trim();
 
   if (!raw) {
-    throw new Error('Modelden boş cevap geldi.');
+    return {
+      ok: false,
+      error: 'Modelden boş cevap geldi.',
+      raw: null,
+      json: null
+    };
   }
 
-  // 1) Direkt parse denemesi
+  // Try direct JSON parse
   try {
-    return JSON.parse(raw);
-  } catch (_) {
-    // devam et, temizleyip yeniden deneyelim
-  }
+    const parsed = JSON.parse(raw);
+    return { ok: true, json: parsed, raw };
+  } catch (_) {}
 
-  // 2) ```json ... ``` code block içinden JSON ayıklama
-  const cleanedFromFences = extractJsonFromText(raw);
-  if (cleanedFromFences) {
+  // Try extracting fenced JSON
+  const cleaned = extractJsonFromText(raw);
+  if (cleaned) {
     try {
-      return JSON.parse(cleanedFromFences);
-    } catch (_) {
-      // devam
-    }
+      const parsed = JSON.parse(cleaned);
+      return { ok: true, json: parsed, raw };
+    } catch (_) {}
   }
 
-  // 3) Hâlâ parse edemiyorsak: anlamlı ve kısa bir hata
-  const preview = raw.length > 600 ? raw.slice(0, 600) + '…' : raw;
-
-  throw new Error(
-    `Model JSON formatında dönmedi veya parse edilemedi. Cevap önizleme: ${preview}`
-  );
+  return {
+    ok: false,
+    error: 'JSON parse edilemedi',
+    raw,
+    json: null
+  };
 }
 
-/**
- * Gelen text içinden JSON gövdesini ayıklamaya çalışır.
- * - ```json ... ``` bloklarını temizler
- * - İlk '{' ile son '}' arasını alır
- */
 function extractJsonFromText(text) {
   if (!text || typeof text !== 'string') return null;
 
   let candidate = text;
 
-  // ```json ... ``` bloğu varsa içerik kısmını al
   const fenced = text.match(/```json([\s\S]*?)```/i);
-  if (fenced && fenced[1]) {
-    candidate = fenced[1];
-  }
+  if (fenced?.[1]) candidate = fenced[1];
 
   const first = candidate.indexOf('{');
   const last = candidate.lastIndexOf('}');
