@@ -1,6 +1,7 @@
 // backend-v2/src/app.js
 const express = require('express');
 const cors = require('cors');
+const { crmRouter } = require('./modules/crm/api/routes');
 
 const { discoveryRouter } = require('./modules/discovery/routes');
 const { intelRouter } = require('./modules/intel/routes');
@@ -19,6 +20,7 @@ app.use('/api/intel', intelRouter);
 app.use('/api/outreach', outreachRouter);
 app.use('/api/leads', leadDashboardRouter);
 app.use('/api/research', researchRouter);
+app.use('/api/crm', crmRouter);
 
 app.get('/', (req, res) => {
   res.json({ ok: true, message: 'CNG AI Agent Backend V2' });

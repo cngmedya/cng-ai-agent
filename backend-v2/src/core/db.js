@@ -63,6 +63,45 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_lead_search_intel_lead
       ON lead_search_intel (lead_id);
   `);
+
+  // 🧠 CRM Brain – lead bazlı etkileşim notları
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lead_crm_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL,
+      note_type TEXT,          -- call | meeting | whatsapp | email | generic | system
+      channel TEXT,            -- whatsapp | phone | email | instagram | linkedin | other
+      direction TEXT,          -- inbound | outbound | internal
+      title TEXT,
+      body TEXT NOT NULL,      -- notun serbest metni
+      sentiment TEXT,          -- positive | neutral | negative | mixed | unknown
+      tags TEXT,               -- JSON string: ["hot_lead","follow_up","pricing"]
+      source TEXT,             -- manual | ai | integration
+      meta_json TEXT,          -- ekstra ham metadata (JSON)
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      created_by TEXT,         -- kullanıcı id / isim (opsiyonel)
+      FOREIGN KEY (lead_id) REFERENCES potential_leads(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lead_crm_notes_lead
+      ON lead_crm_notes (lead_id);
+  `);
+
+  // 🧠 CRM Brain – lead için özetlenmiş “beyin” snapshot’ları
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lead_crm_brains (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL,
+      brain_version TEXT,         -- örn: v1.0.0
+      brain_json TEXT NOT NULL,   -- AI özet beyin durumu (JSON)
+      last_source TEXT,           -- hangi pipeline oluşturdu: research|whatsapp_v3|manual
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (lead_id) REFERENCES potential_leads(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lead_crm_brains_lead
+      ON lead_crm_brains (lead_id);
+  `);
 }
 
 function getDb() {
