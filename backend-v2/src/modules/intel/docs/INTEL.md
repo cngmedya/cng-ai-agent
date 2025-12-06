@@ -1,4 +1,4 @@
-# Intel Module — v3.0.0
+# Intel Module —v1.3.0
 
 Intel, firmanın temel SWOT’unu ve website bazlı derin analizini oluşturan modüldür.
 
@@ -6,6 +6,10 @@ Intel, firmanın temel SWOT’unu ve website bazlı derin analizini oluşturan m
 
 ## 🚀 Modülün Görevi
 Intel iki seviyeli analiz yürütür:
+INTEL modülü, lead bazlı temel SWOT + dijital durum analizinin yanında,
+website’i olan lead’ler için basit teknik on-page SEO skorlaması (title, meta
+description, heading yapısı) üretir ve bu veriyi hem kendi JSON çıktısına hem
+de website bazlı derin analiz (lead_deep_website_analysis) prompt’una enjekte eder.
 
 ### 1) Basic Intel (AI Classification + SWOT)
 `analyzeLead()`

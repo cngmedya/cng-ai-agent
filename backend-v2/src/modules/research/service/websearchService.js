@@ -1,6 +1,6 @@
 // backend-v2/src/modules/research/service/websearchService.js
 //
-// Premium OSINT Web Search Engine v1.0
+// Premium OSINT Web Search Engine v1.1
 // - Çoklu arama sorgusu üretir
 // - (Opsiyonel) SerpAPI / Bing API entegrasyonuna hazır
 // - Sonuçları normalize eder
@@ -8,9 +8,11 @@
 // - Sosyal medya ve platform tespiti yapar
 // - Risk & reputasyon flag'leri çıkarır
 // - CIR için "web_presence" çıktısını hazırlar
+// - EXTRA (v1.1): lead_search_intel tablosuna arama kaydı yazar
 
 const axios = require('axios');
 const { URL } = require('url');
+const { getDb } = require('../../../core/db'); // DB entegrasyonu
 
 /**
  * Ana fonksiyon:
@@ -42,7 +44,7 @@ async function runWebSearch(lead) {
     }
   }
 
-  // Eğer hiçbir API yoksa, yine de boş ama tutarlı bir yapı döneriz
+  // Normalize + dedupe
   const normalized = normalizeAndDeduplicate(rawResults);
 
   const {
@@ -55,7 +57,7 @@ async function runWebSearch(lead) {
 
   const searchKeywordsDetected = extractKeywordSignals(queries, normalized);
 
-  return {
+  const web_presence = {
     directories,
     news_mentions: newsMentions,
     blog_mentions: blogMentions,
@@ -63,6 +65,24 @@ async function runWebSearch(lead) {
     search_keywords_detected: searchKeywordsDetected,
     risk_or_reputation_flags: riskFlags
   };
+
+  // EXTRA: lead_search_intel tablosuna kaydet (varsa)
+  try {
+    persistSearchIntel({
+      lead,
+      queries,
+      normalizedResults: normalized,
+      directories,
+      newsMentions,
+      blogMentions,
+      thirdPartyProfiles,
+      riskFlags
+    });
+  } catch (err) {
+    console.warn('[websearch] persistSearchIntel hata:', err.message);
+  }
+
+  return web_presence;
 }
 
 /**
@@ -429,7 +449,7 @@ function extractKeywordSignals(queries, normalizedResults) {
     freq.set(t, (freq.get(t) || 0) + 1);
   }
 
-  // Sık çıkan keywordleri al (çok genel kelimeleri filtrelemek istersek stop-word listesi ekleyebiliriz)
+  // Sık çıkan keywordleri al
   const sorted = Array.from(freq.entries())
     .sort((a, b) => b[1] - a[1])
     .slice(0, 30) // ilk 30
@@ -450,6 +470,77 @@ function extractKeywordSignals(queries, normalizedResults) {
     top_terms: sorted,
     query_terms: queryWords
   };
+}
+
+/**
+ * lead_search_intel tablosuna arama özetini yazar
+ * (Tablo yoksa ya da schema farklıysa backend'i kırmaz, sadece warn log atar)
+ */
+function persistSearchIntel({
+  lead,
+  queries,
+  normalizedResults,
+  directories,
+  newsMentions,
+  blogMentions,
+  thirdPartyProfiles,
+  riskFlags
+}) {
+  const db = getDb();
+
+  const mentions_count =
+    directories.length +
+    newsMentions.length +
+    blogMentions.length +
+    thirdPartyProfiles.length;
+
+  const complaints_count = riskFlags.filter(
+    (r) => r.type === 'reputation_risk'
+  ).length;
+
+  const payload = {
+    lead_id: lead.id || null,
+    query: queries.join(' | '),
+    engine: 'hybrid_osint_v1',
+    results_json: JSON.stringify({
+      directories,
+      news: newsMentions,
+      blogs: blogMentions,
+      profiles: thirdPartyProfiles,
+      risk_flags: riskFlags,
+      total: normalizedResults.length
+    }),
+    mentions_count,
+    complaints_count,
+    last_checked_at: new Date().toISOString(),
+    status: normalizedResults.length > 0 ? 'ok' : 'no_results',
+    error_message: null
+  };
+
+  db.prepare(`
+    INSERT INTO lead_search_intel (
+      lead_id,
+      query,
+      engine,
+      results_json,
+      mentions_count,
+      complaints_count,
+      last_checked_at,
+      status,
+      error_message
+    )
+    VALUES (
+      @lead_id,
+      @query,
+      @engine,
+      @results_json,
+      @mentions_count,
+      @complaints_count,
+      @last_checked_at,
+      @status,
+      @error_message
+    )
+  `).run(payload);
 }
 
 module.exports = {

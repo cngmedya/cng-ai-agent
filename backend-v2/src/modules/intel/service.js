@@ -4,6 +4,7 @@ const { chatJson } = require('../../shared/ai/llmClient');
 const { loadPrompt } = require('../../shared/ai/promptLoader');
 const { fetchWebsiteSnapshot } = require('../../shared/web/fetchWebsite');
 const { analyzeOnPageSeo } = require('../../shared/seo/onpageAnalyzer');
+const { analyzeOnpage } = require('./seoOnpageService');
 
 const intelPrompt = loadPrompt('intel/lead_intel_analysis.md');
 const deepIntelPrompt = loadPrompt('intel/lead_deep_website_analysis.md');
@@ -67,16 +68,11 @@ async function analyzeLeadDeep({ leadId }) {
     throw new Error(`Lead için website alanı boş: id=${id}`);
   }
 
-  // 1) Website snapshot (fetch fail olsa bile error objesi dönecek)
   const websiteSnapshot = await fetchWebsiteSnapshot(lead.website);
 
-  // 2) On-page SEO analizi (title/meta/h1/keyword match)
-  const seoOnPage = analyzeOnPageSeo({
-    websiteSnapshot,
-    lead
-  });
+  // 🔍 Yeni: basit teknik on-page SEO analizi
+  const seo_onpage = analyzeOnpage(websiteSnapshot);
 
-  // 3) Deep intel için prompt'a tüm veriyi gönder
   const system = deepIntelPrompt;
   const user = JSON.stringify({
     lead: {
@@ -93,7 +89,7 @@ async function analyzeLeadDeep({ leadId }) {
       ai_notes: lead.ai_notes
     },
     website: websiteSnapshot,
-    seo_onpage: seoOnPage
+    seo_onpage // 👈 prompt’a da veriyoruz
   });
 
   const result = await chatJson({ system, user });
@@ -103,7 +99,8 @@ async function analyzeLeadDeep({ leadId }) {
     leadName: lead.name,
     website: websiteSnapshot.url,
     websiteError: websiteSnapshot.error || null,
-    intel: result
+    intel: result,
+    seo_onpage // 👈 API cevabına da ekliyoruz
   };
 }
 

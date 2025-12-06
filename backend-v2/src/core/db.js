@@ -9,8 +9,7 @@ function initSchema(db) {
   // Foreign key desteğini aç
   db.pragma('foreign_keys = ON');
 
-  // Eğer yeni bir DB oluşursa potential_leads tablosu da burada garanti altına alınmış olur.
-  // Eğer zaten varsa, CREATE TABLE IF NOT EXISTS hiçbir şeye dokunmaz.
+  // Ana lead tablosu (discovery + intel + research hepsi buradan beslenecek)
   db.exec(`
     CREATE TABLE IF NOT EXISTS potential_leads (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,7 +31,7 @@ function initSchema(db) {
     );
   `);
 
-  // Yeni CIR rapor tablosu
+  // CIR / intel raporları (high-level rapor arşivi)
   db.exec(`
     CREATE TABLE IF NOT EXISTS lead_intel_reports (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +41,27 @@ function initSchema(db) {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (lead_id) REFERENCES potential_leads(id)
     );
+  `);
+
+  // 🔍 Web arama (OSINT) sonuçlarının özetini tuttuğumuz tablo
+  // websearchService.js → persistSearchIntel burayı kullanıyor
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS lead_search_intel (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL,
+      query TEXT NOT NULL,
+      engine TEXT NOT NULL,             -- google | bing | mock
+      results_json TEXT,                -- normalize edilmiş sonuçlar (JSON string)
+      mentions_count INTEGER DEFAULT 0,
+      complaints_count INTEGER DEFAULT 0,
+      last_checked_at TEXT,
+      status TEXT,                      -- ok | no_results | error
+      error_message TEXT,
+      FOREIGN KEY (lead_id) REFERENCES potential_leads(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lead_search_intel_lead
+      ON lead_search_intel (lead_id);
   `);
 }
 

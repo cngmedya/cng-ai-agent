@@ -1,46 +1,36 @@
-# Research Module – CHANGELOG
 
-## v1.1.0 (2025-12-03)
-### Added
-- lead_cir_reports tablosu eklendi.
-- CIR raporlarının otomatik DB'ye kaydedilmesi eklendi.
-- /api/research/history/:leadId endpoint’i eklendi.
-- Hem basic intel hem deep intel hem OSINT hem Ads hem Social hem Benchmark birleşimiyle full "CNG Intelligence Report" üretimi stabil hale getirildi.
-- research_master_prompt sistem içine taşındı (fs bağımlılığı kaldırıldı).
+# CHANGELOG – Research Module (CIR)
 
-### Fixed
-- Wrong import path for discovery repo resolved.
-- API route’da “router not defined” hatası düzeltildi.
+## [1.3.0] – 2025-12-05
+- Yeni `competitorsService.js` eklendi:
+  - `potential_leads` tablosundan aynı şehir ve kategoriye göre rakip tespiti.
+  - Her rakip için 0–100 arası `competitor_strength_score` hesaplanması.
+  - Skor bileşenleri: web sitesi varlığı, AI skoru, kategorik eşleşme, şehir eşleşmesi, OSINT yoğunluğu.
+- Yeni `benchmarkService.js` eklendi:
+  - Rakip skorlarından pazar benchmark skoru üretimi.
+  - `benchmark_score`, `strengths_vs_market`, `weaknesses_vs_market` alanlarının oluşturulması.
+- `researchService.generateFullResearch`:
+  - `findCompetitors(lead, web_presence)` ve `benchmarkLead(lead, competitors)` ile entegre edildi.
+  - `raw.competitors` ve `raw.benchmark` alanları LLM’e giden payload’a eklendi.
 
-### Notes
-Research modülü artık uçtan uca çalışan tam bir “premium intelligence engine” durumundadır.
----
+## [1.2.0] – 2025-12-05
+- `socialsService.js` tamamen yenilendi:
+  - Lead websitesinden HTML tarayıp sosyal medya linkleri çıkarma.
+  - `web_presence.third_party_profiles` ile OSINT tabanlı sosyal link birleştirme.
+  - Instagram, Facebook, LinkedIn, YouTube, TikTok için URL tespiti.
+  - Bulunan platform sayısına göre `activity_score` (0–100) üretimi.
+- `adsService.js` modülü tanımlandı:
+  - Temel pixel / analytics sinyallerinin tespiti (Facebook Pixel, Google Analytics vb.).
+  - `ad_intel` objesi ile CIR içine özet aktarma.
+- `RESEARCH.md` modül dokümantasyonu sosyal medya ve reklam istihbaratı akışını içerecek şekilde güncellendi.
 
-## v1.1.0 — 2025-12-03
-### Premium Web Search (OSINT) Engine
-- websearchService.js tamamen yeniden tasarlandı.
-- SerpAPI + Bing entegrasyonuna hazır hale getirildi.
-- Sonuç normalizasyonu, URL deduplication ve type classification eklendi.
-- Sosyal medya ve platform tespiti (Instagram, Facebook, LinkedIn, YouTube, TikTok, Behance, Dribbble, Archilovers, Houzz, Pinterest) entegre edildi.
-- Risk & reputasyon scanner (şikayet, scam, dava vb.) eklendi.
-- CIR için “web_presence” çıktısı zenginleştirildi:
-  - directories
-  - news_mentions
-  - blog_mentions
-  - third_party_profiles
-  - search_keywords_detected
-  - risk_or_reputation_flags
+## [1.1.0] – 2025-12-04
+- CIR raporları için `lead_intel_reports` tablosu eklendi.
+- Her `full-report` çağrısında CIR sonucu DB’ye yazılmaya başlandı.
+- `GET /api/research/history/:leadId` endpoint’i eklendi.
+- `potential_leads` tablosuna `last_cir_score` ve `last_cir_created_at` alanları eklendi.
 
----
-
-## v1.0.0 — 2025-12-02
-### 🎉 Initial Release (CIR v1 Engine)
-- Research modülü tamamen oluşturuldu.
-- Klasör mimarisi kuruldu (api, controller, service, repo, ai, docs).
-- CNG Intelligence Report (CIR) resmi formatı tanımlandı.
-- Master prompt: research_master_prompt.md oluşturuldu.
-- `/api/research/full-report` endpoint’i eklendi.
-- Web search, sosyal medya, reklam, rakip analizi ve benchmark için servis iskeletleri kuruldu.
-- CIR JSON yapısı zorunlu format olarak tanımlandı.
-- Modül bağımsız versionlama sistemine alındı.
-- RESEARCH.md (tam dokümantasyon) hazırlandı.
+## [1.0.0] – 2025-12-03
+- Temel CIR pipeline kuruldu:
+  - intel_basic + intel_deep + web_search + basit social/ad/competitor/benchmark iskeleti.
+  - LLM ile tek JSON rapor üretimi.
