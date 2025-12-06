@@ -16,6 +16,18 @@ async function leadAiDashboardHandler(req, res, next) {
   }
 }
 
+exports.getAIDashboard = async (req, res, next) => {
+  try {
+    const data = await service.getLeadAiDashboard({
+      leadId: req.params.leadId,
+    });
+
+    res.json({ ok: true, data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   leadAiDashboardHandler
 };

@@ -1,113 +1,160 @@
-# OUTREACH MODULE – Full Technical Documentation
-**Module Version:** v1.0.0  
-**Last Update:** 2025-12-02  
-**Maintainer:** CNG AI Agent Backend Team
+
+📌 OUTREACH.md (v2.1 FINAL)
+
+— FULL TECHNICAL DOCUMENTATION —
+
+# OUTREACH MODULE — Full Technical Documentation
+**Module Version:** v2.1.0  
+**Last Update:** 2025-12-06  
+**Maintainer:** CNG Medya AI Engineering Team  
+**Status:** Stable — Production Ready
 
 ---
 
 # 📌 1. Purpose
-Outreach modülü, firmanın satış pipeline’ındaki **ilk temas mesajını** üretir.
+Outreach modülü, CNG Medya’nın satış pipeline’ındaki ilk iletişim ve takip süreçlerini otomatikleştiren motorudur.
 
 Görevleri:
 
-- WhatsApp / Email / Instagram DM mesajları üretmek  
-- Tonlama + dil ayarı yapmak  
-- Lead özelliklerine göre kişiselleştirilmiş mesajlar oluşturmak  
-- Satış ekibinin zamanını azaltmak  
-- Profesyonel ve ikna edici giriş mesajları sağlamak
+- WhatsApp / Email / Instagram DM için **ilk temas mesajı (v1)** oluşturmak  
+- Lead + Intel verilerini işleyerek **çok adımlı outreach sequence (v2)** üretmek  
+- Tonlama / dil / kanal uyumu sağlayarak profesyonel, premium ve sektöre uyumlu iletişim üretmek  
 
 ---
 
 # 📌 2. Responsibilities
 
-### ✔ 1. Kişiselleştirilmiş İlk Mesaj Üretimi  
-- Kanal → whatsapp / email / instagram  
-- Ton → premium / samimi / kurumsal  
-- Dil → TR / EN  
-- Lead meta verisi entegre edilir
+### ✔ v1 — İlk Temas Motoru
+- Tek seferlik mesaj üretimi  
+- Kanal → whatsapp / email / instagram_dm  
+- Ton → premium / kurumsal / samimi  
+- Dil → tr / en  
+- Prompt: `first_contact_message.md`
 
-### ✔ 2. AI Mesaj Üretim Motoru  
-- Prompt kontrollü  
-- JSON çıktısı  
-- Lead Name, konum, kategori bazlı kişiselleştirir
+### ✔ v2 — Multi-Step Sequence Motoru
+- Lead bazlı AI destekli iletişim sekansı  
+- Kullanılan parametreler:
+  - channel  
+  - tone  
+  - language  
+  - objective  
+  - max_followups  
+- INTEL modülünden gelen SWOT + digital_status + priority_score entegre edilir  
+- Prompt: `outreach_sequence_v2.md` (Universal Voice Edition)
 
 ---
 
 # 📌 3. Technical Architecture
 
-```
-/api
-  outreachRoutes.js
-
-/controller
-  controller.js
-
-/service
-  outreachService.js
-
-/ai
-  first_contact_message.md
-
-/docs
-  OUTREACH.md
-  CHANGELOG.md
-```
+modules/outreach/
+│
+├── controller.js
+├── service.js
+├── repo.js
+│
+├── first_contact_message.md
+├── outreach_sequence_v2.md
+│
+└── docs/
+├── OUTREACH.md
+└── CHANGELOG.md
 
 ---
 
-# 📌 4. Data Flow
+# 📌 4. API Endpoints
 
-```
-Client → first-contact → Controller
-→ Service → Prompt Loader → LLM → JSON Response
-```
-
----
-
-# 📌 5. Core Endpoint
-
-| Method | Endpoint | Açıklama |
-|--------|----------|-----------|
-| **POST** | `/api/outreach/first-contact` | Lead için ilk temas mesajı oluşturur |
+| Method | Endpoint | Version | Açıklama |
+|--------|----------|---------|----------|
+| POST | `/api/outreach/first-contact` | v1.x | Tek seferlik ilk temas mesajı üretir |
+| POST | `/api/outreach/sequence/:leadId` | v2.x | Çok adımlı AI outreach sekansı üretir |
 
 ---
 
-# 📌 6. Dependencies
+# 📌 5. Data Flow
 
-- shared/ai/llmClient  
-- shared/db/sqlite  
-- shared/promptLoader  
+## 5.1 v1 — First Contact Flow
 
----
-
-# 📌 7. AI Prompt
-
-### `first_contact_message.md`
-- Ton, kanal, dil, lead bilgisi  
-- Minimal, zarif ve profesyonel mesaj üretir  
-- “Merhaba şirket adı …” akışını kullanır  
-- WhatsApp/email için farklı formatlar üretir
+Client
+→ POST /first-contact
+→ Controller
+→ Service.generateFirstContact()
+→ promptLoader
+→ llmClient (Responses API)
+← JSON (subject, message)
 
 ---
 
-# 📌 8. Known Limitations
+## 5.2 v2 — Multi-Step Sequence Flow
 
-- WhatsApp için metin formatı sade tutulmalı  
-- Email HTML template desteği ileride eklenecek  
-- DM mesajları karakter sınırlı olabilir  
-- Çok resmi ton bazen fazla kurumsal durabilir
-
----
-
-# 📌 9. Future Improvements
-
-- WhatsApp Cloud API entegrasyonu  
-- Email HTML template üreticisi  
-- Multi-message follow-up sekansları  
-- Scheduling + otomatik gönderim sistemi  
-- CRM aktivitelerine loglama
+Client
+→ POST /sequence/:leadId
+→ Controller
+→ Service.generateSequenceForLead()
+→ repo.getLeadById()
+→ intel.analyzeLead()
+→ promptLoader (outreach_sequence_v2.md)
+→ llmClient (strict JSON)
+← ai_context + sequence[]
 
 ---
 
-# 📌 10. Versioning History  
-(Bkz. CHANGELOG.md)
+# 📌 6. AI Prompts
+
+### 6.1. `first_contact_message.md`  
+- v1 motoru  
+- Sade, premium, kısa mesaj üretimi  
+
+### 6.2. `outreach_sequence_v2.md`  
+- Universal Voice Edition (v2.1)  
+- CNG Medya’nın premium + modern + stratejik ajans dili  
+- Çok adımlı sequence üretir  
+- Strict JSON formatı  
+
+---
+
+# 📌 7. Output Structure
+
+## ai_context
+```json
+{
+  "ai_score_band": "A",
+  "priority_score": 75,
+  "why_now": "string",
+  "risk_level": "medium",
+  "ideal_entry_channel": "whatsapp"
+}
+
+sequence[]
+
+{
+  "step": 1,
+  "type": "initial",
+  "send_after_hours": 0,
+  "subject": null,
+  "message": "string"
+}
+
+
+⸻
+
+📌 8. Dependencies
+	•	shared/ai/llmClient.js
+	•	shared/ai/promptLoader.js
+	•	modules/intel/service.js → analyzeLead()
+	•	core/db.js
+
+⸻
+
+📌 9. Future Improvements
+	•	Sector Packs (industry-specific add-ons)
+	•	Follow-up scheduling (jobs/)
+	•	WhatsApp Cloud API entegrasyonu
+	•	UI dashboard’a sequence embed
+	•	Sequence archive (DB kayıt sistemi)
+
+⸻
+
+📌 10. Versioning
+
+Detaylar: CHANGELOG.md
+
