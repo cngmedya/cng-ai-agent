@@ -9,6 +9,8 @@ const { outreachRouter } = require('./modules/outreach/routes');
 const { leadDashboardRouter } = require('./modules/leadDashboard/routes');
 const { researchRouter } = require('./modules/research/api/routes');
 const { authRouter } = require('./modules/auth/api/routes');
+const { godmodeRouter } = require('./modules/godmode/api/routes');
+
 
 // v2 comms layer
 const { emailRouter } = require('./modules/email/routes');
@@ -37,6 +39,7 @@ app.use('/api/crm', crmRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/brain', brainRouter);
+app.use('/api/godmode', godmodeRouter);
 
 // Comms layer
 app.use('/api/email', emailRouter);

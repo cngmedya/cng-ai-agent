@@ -1,22 +1,24 @@
 // backend-v2/src/modules/godmode/api/routes.js
 const express = require('express');
+const router = express.Router();
+
 const {
-  getStatusHandler,
-  createScanJobHandler,
-  listJobsHandler,
-  getJobHandler,
+  getStatus,
+  createDiscoveryJob,
+  listJobs,
+  getJob,
+  runJob,
 } = require('./controller');
 
-const godmodeRouter = express.Router();
+// Status
+router.get('/status', getStatus);
 
-godmodeRouter.get('/status', getStatusHandler);
-
-godmodeRouter.post('/scan', createScanJobHandler);
-
-godmodeRouter.get('/jobs', listJobsHandler);
-
-godmodeRouter.get('/jobs/:id', getJobHandler);
+// Jobs
+router.post('/jobs/discovery-scan', createDiscoveryJob);
+router.get('/jobs', listJobs);
+router.get('/jobs/:id', getJob);
+router.post('/jobs/:id/run', runJob);
 
 module.exports = {
-  godmodeRouter,
+  godmodeRouter: router,
 };

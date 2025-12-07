@@ -1,64 +1,61 @@
 // backend-v2/src/modules/godmode/api/controller.js
 const godmodeService = require('../service');
 
-async function getStatusHandler(req, res) {
+/**
+ * GET /api/godmode/status
+ */
+function getStatus(req, res) {
   try {
-    const status = godmodeService.getGodmodeStatus();
-    res.json({ ok: true, data: status });
+    const data = godmodeService.getStatus();
+    res.json({ ok: true, data });
   } catch (err) {
     console.error('[GODMODE][STATUS] Error:', err);
     res.status(500).json({
       ok: false,
-      error: 'GODMODE_STATUS_FAILED',
+      error: 'GODMODE_STATUS_ERROR',
       message: err.message || 'Godmode status alınırken hata oluştu.',
     });
   }
 }
 
-async function createScanJobHandler(req, res) {
+/**
+ * POST /api/godmode/jobs/discovery-scan
+ */
+function createDiscoveryJob(req, res) {
   try {
-    const payload = req.body || {};
-
-    if (!payload.city && !payload.country && !Array.isArray(payload.categories)) {
-      return res.status(400).json({
-        ok: false,
-        error: 'GODMODE_BAD_REQUEST',
-        message: 'En azından city, country veya categories alanlarından biri dolu olmalıdır.',
-      });
-    }
-
-    const job = godmodeService.createScanJob(payload);
-
-    res.json({
-      ok: true,
-      data: job,
-    });
+    const job = godmodeService.createDiscoveryJob(req.body || {});
+    res.json({ ok: true, data: job });
   } catch (err) {
-    console.error('[GODMODE][CREATE_SCAN_JOB] Error:', err);
-    res.status(500).json({
+    console.error('[GODMODE][CREATE_JOB] Error:', err);
+    res.status(400).json({
       ok: false,
-      error: 'GODMODE_CREATE_SCAN_JOB_FAILED',
-      message: err.message || 'Scan job oluşturulurken hata oluştu.',
+      error: 'GODMODE_CREATE_JOB_ERROR',
+      message: err.message || 'Discovery job oluşturulurken hata oluştu.',
     });
   }
 }
 
-async function listJobsHandler(req, res) {
+/**
+ * GET /api/godmode/jobs
+ */
+function listJobs(req, res) {
   try {
-    const limit = req.query.limit ? Number(req.query.limit) : 20;
-    const jobs = godmodeService.listJobs(limit);
-    res.json({ ok: true, data: jobs });
+    const items = godmodeService.listJobs();
+    res.json({ ok: true, data: items });
   } catch (err) {
     console.error('[GODMODE][LIST_JOBS] Error:', err);
     res.status(500).json({
       ok: false,
-      error: 'GODMODE_LIST_JOBS_FAILED',
+      error: 'GODMODE_LIST_JOBS_ERROR',
       message: err.message || 'Job listesi alınırken hata oluştu.',
     });
   }
 }
 
-async function getJobHandler(req, res) {
+/**
+ * GET /api/godmode/jobs/:id
+ */
+function getJob(req, res) {
   try {
     const { id } = req.params;
     const job = godmodeService.getJobById(id);
@@ -76,15 +73,36 @@ async function getJobHandler(req, res) {
     console.error('[GODMODE][GET_JOB] Error:', err);
     res.status(500).json({
       ok: false,
-      error: 'GODMODE_GET_JOB_FAILED',
+      error: 'GODMODE_GET_JOB_ERROR',
       message: err.message || 'Job detayı alınırken hata oluştu.',
     });
   }
 }
 
+/**
+ * POST /api/godmode/jobs/:id/run
+ */
+async function runJob(req, res) {
+  try {
+    const { id } = req.params;
+    const job = await godmodeService.runDiscoveryJob(id);
+    res.json({ ok: true, data: job });
+  } catch (err) {
+    console.error('[GODMODE][RUN_JOB] Error:', err);
+    const status = err.code === 'JOB_NOT_FOUND' ? 404 : 500;
+
+    res.status(status).json({
+      ok: false,
+      error: 'GODMODE_RUN_JOB_ERROR',
+      message: err.message || 'Job çalıştırılırken hata oluştu.',
+    });
+  }
+}
+
 module.exports = {
-  getStatusHandler,
-  createScanJobHandler,
-  listJobsHandler,
-  getJobHandler,
+  getStatus,
+  createDiscoveryJob,
+  listJobs,
+  getJob,
+  runJob,
 };
