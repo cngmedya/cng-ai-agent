@@ -2,9 +2,6 @@
 const os = require('os');
 const packageJson = require('../../../../package.json');
 
-/**
- * Sistem / runtime durumu
- */
 function getSystemStatus() {
   return {
     app: {
@@ -30,9 +27,6 @@ function getSystemStatus() {
   };
 }
 
-/**
- * Modül versiyon / durum tablosu (objektif kaynak)
- */
 function getModuleStatus() {
   return {
     discovery: 'v2.x — OK',
@@ -46,13 +40,10 @@ function getModuleStatus() {
     whatsapp: 'v0.1 — OK',
     auth: 'v1.0 — OK',
     admin: 'v1.0 — OK',
-    brain: 'pending',
+    brain: 'v1.0 — OK',
   };
 }
 
-/**
- * /api/admin/modules → array formatında dönüş
- */
 function getAdminModules() {
   const modules = getModuleStatus();
   return Object.entries(modules).map(([key, status]) => ({
@@ -61,9 +52,6 @@ function getAdminModules() {
   }));
 }
 
-/**
- * /api/admin/config → env + feature flags
- */
 function getAdminConfig() {
   return {
     env: {
@@ -81,14 +69,10 @@ function getAdminConfig() {
   };
 }
 
-/**
- * /api/admin/overview → sistem + modüller + db health (şimdilik stub)
- */
 function getAdminOverview() {
   return {
     system: getSystemStatus(),
     modules: getModuleStatus(),
-    // İleride gerçek health check ekleriz; şimdilik stub
     db: {
       ok: false,
       error: 'db health check not implemented',

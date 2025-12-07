@@ -1,3 +1,4 @@
+// backend-v2/src/modules/email/routes.js
 const { Router } = require('express');
 const { sendTestEmailHandler, sendLeadEmailHandler } = require('./controller');
 

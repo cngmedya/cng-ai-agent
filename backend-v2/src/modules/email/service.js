@@ -1,9 +1,7 @@
 // backend-v2/src/modules/email/service.js
 const repo = require('./repo');
-// ileride: shared/mail/mailerClient.js gibi bir katman ekleyebiliriz.
 
 async function sendTestEmail(payload) {
-  // TODO: gerçek mail gönderimi için SMTP entegrasyonu eklenecek.
   const log = await repo.logEmail({
     leadId: null,
     to: payload.to || 'test@example.com',
@@ -21,7 +19,6 @@ async function sendTestEmail(payload) {
 }
 
 async function sendEmailForLead({ leadId, payload }) {
-  // payload: { subject, message, toOverride? }
   const log = await repo.logEmail({
     leadId,
     to: payload.to || null,

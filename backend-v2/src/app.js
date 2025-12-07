@@ -15,7 +15,7 @@ const { emailRouter } = require('./modules/email/routes');
 const { whatsappRouter } = require('./modules/whatsapp/routes');
 const { outreachSchedulerRouter } = require('./modules/outreachScheduler/routes');
 const { adminRouter } = require('./modules/admin/api/routes');
-
+const { brainRouter } = require('./modules/brain/api/routes');
 
 // ⚠️ Henüz hazır olmayan modüller – router bağlamıyoruz
 // const { authRouter } = require('./modules/auth/api/routes');
@@ -36,6 +36,7 @@ app.use('/api/research', researchRouter);
 app.use('/api/crm', crmRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/brain', brainRouter);
 
 // Comms layer
 app.use('/api/email', emailRouter);

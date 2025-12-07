@@ -1,8 +1,11 @@
-const { Router } = require('express');
+// backend-v2/src/modules/outreachScheduler/routes.js
+const express = require('express');
 const { enqueueOutreachSequenceHandler } = require('./controller');
 
-const outreachSchedulerRouter = Router();
+const outreachSchedulerRouter = express.Router({ mergeParams: true });
 
 outreachSchedulerRouter.post('/enqueue/:leadId', enqueueOutreachSequenceHandler);
 
-module.exports = { outreachSchedulerRouter };
+module.exports = {
+  outreachSchedulerRouter,
+};

@@ -1,59 +1,50 @@
 // backend-v2/src/modules/email/repo.js
-const { getDb } = require('../../core/db');
 
-function logEmail(payload = {}) {
-  const db = getDb();
+// Basit in-memory log (v0.1 – demo amaçlı)
+// Uygulama restart olduğunda sıfırlanır.
+const emailLogsMemory = [];
 
-  try {
-    // Tabloyu garanti et
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS email_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        lead_id INTEGER,
-        to_address TEXT,
-        subject TEXT,
-        body TEXT,
-        meta_json TEXT,
-        created_at TEXT DEFAULT (datetime('now'))
-      )
-    `);
+/**
+ * Genel log fonksiyonu (test + lead mailleri buradan geçiyor)
+ */
+async function logEmail({
+  leadId = null,
+  to,
+  subject,
+  body,
+  channel,
+  status,
+  providerMessageId = null,
+}) {
+  const now = new Date().toISOString();
 
-    const {
-      leadId = null,
-      to = null,
-      subject = null,
-      body = null,
-      meta = {}
-    } = payload;
+  const record = {
+    id: `${leadId || 'test'}-${Date.now()}`,
+    lead_id: leadId,
+    to_email: to,
+    subject,
+    body,
+    channel,
+    status,
+    provider_message_id: providerMessageId,
+    created_at: now,
+  };
 
-    const stmt = db.prepare(`
-      INSERT INTO email_logs (lead_id, to_address, subject, body, meta_json)
-      VALUES (?, ?, ?, ?, ?)
-    `);
+  // Son eklenen en başta olsun
+  emailLogsMemory.unshift(record);
 
-    const result = stmt.run(
-      leadId,
-      to,
-      subject,
-      body,
-      JSON.stringify(meta || {})
-    );
+  return record;
+}
 
-    return {
-      ok: true,
-      id: result.lastInsertRowid
-    };
-  } catch (err) {
-    console.error('[email_logs] insert failed:', err.message);
-
-    // Repo hiçbir zaman API’yi düşürmesin
-    return {
-      ok: false,
-      error: err.message
-    };
-  }
+/**
+ * Bir lead’e ait email loglarını getir
+ */
+async function getEmailLogsForLead(leadId) {
+  if (!leadId) return [];
+  return emailLogsMemory.filter((log) => log.lead_id === leadId);
 }
 
 module.exports = {
-  logEmail
+  logEmail,
+  getEmailLogsForLead,
 };

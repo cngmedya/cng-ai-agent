@@ -1,12 +1,17 @@
-const { Router } = require('express');
+// backend-v2/src/modules/whatsapp/routes.js
+const express = require('express');
 const {
   sendTestWhatsappHandler,
   sendWhatsappForLeadHandler,
+  listWhatsappLogsHandler,
 } = require('./controller');
 
-const whatsappRouter = Router();
+const router = express.Router();
 
-whatsappRouter.post('/test', sendTestWhatsappHandler);
-whatsappRouter.post('/send-for-lead/:leadId', sendWhatsappForLeadHandler);
+router.post('/test', sendTestWhatsappHandler);
+router.post('/send-for-lead/:leadId', sendWhatsappForLeadHandler);
+router.get('/logs', listWhatsappLogsHandler);
 
-module.exports = { whatsappRouter };
+module.exports = {
+  whatsappRouter: router,
+};

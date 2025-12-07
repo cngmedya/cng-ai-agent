@@ -1,45 +1,68 @@
 // backend-v2/src/modules/whatsapp/service.js
-const repo = require('./repo');
+const { logWhatsapp, listWhatsappLogs } = require('./repo');
+const logger = require('../../core/logger');
 
-/**
- * NOT:
- * Şu an gerçek WhatsApp Cloud API entegrasyonu yok.
- * Sadece log kaydı atıyoruz. v1.0.0'da Cloud API bağlanacak.
- */
-
-async function sendTestMessage(payload) {
-  const log = await repo.logWhatsapp({
+async function sendTestMessage() {
+  const entry = logWhatsapp({
     leadId: null,
-    phone: payload.phone || '+900000000000',
-    message: payload.message || 'CNG AI Agent WhatsApp test mesajı',
-    channel: 'test',
-    status: 'queued',
-    providerMessageId: null,
+    phone: null,
+    message:
+      '[TEST] WhatsApp module v0.1.0 — gerçek WhatsApp API çağrısı yok, sadece in-memory log.',
+    meta: { kind: 'test', version: 'v0.1.0' },
   });
 
   return {
-    ...log,
-    note: 'WhatsApp module v0.1.0 — Cloud API entegrasyonu henüz yok, sadece log kaydı.',
+    ok: true,
+    id: entry.id,
+    note:
+      'WhatsApp module v0.1.0 — Cloud API entegrasyonu henüz yok, sadece in-memory log.',
   };
 }
 
-async function sendMessageForLead({ leadId, payload }) {
-  const log = await repo.logWhatsapp({
+async function sendMessageForLead({ leadId, phone, message }) {
+  if (!leadId) throw new Error('leadId zorunlu');
+  if (!message) throw new Error('message zorunlu');
+
+  const entry = logWhatsapp({
     leadId,
-    phone: payload.phone || null,
-    message: payload.message,
-    channel: 'lead_whatsapp',
-    status: 'queued',
-    providerMessageId: null,
+    phone: phone || null,
+    message,
+    meta: {
+      kind: 'lead_send',
+      version: 'v0.1.0',
+    },
   });
 
+  if (logger && typeof logger.info === 'function') {
+    logger.info('[WHATSAPP][SEND_FOR_LEAD]', {
+      leadId,
+      phone: phone || null,
+      entryId: entry.id,
+    });
+  } else {
+    console.log('[WHATSAPP][SEND_FOR_LEAD]', {
+      leadId,
+      phone: phone || null,
+      entryId: entry.id,
+    });
+  }
+
   return {
-    ...log,
-    note: 'Şu an sadece DB log kaydı oluşturuluyor. Cloud API eklendiğinde gerçek gönderim yapılacak.',
+    ok: true,
+    id: entry.id,
+    lead_id: leadId,
+    phone: phone || null,
+    note:
+      'Mesaj sadece in-memory loglandı. Gerçek WhatsApp gönderimi v0.2’de eski WhatsApp Engine ile bağlanacak.',
   };
+}
+
+function getLastLogs(limit = 50) {
+  return listWhatsappLogs(limit);
 }
 
 module.exports = {
   sendTestMessage,
   sendMessageForLead,
+  getLastLogs,
 };

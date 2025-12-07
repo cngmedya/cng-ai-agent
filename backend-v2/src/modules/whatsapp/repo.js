@@ -1,55 +1,35 @@
 // backend-v2/src/modules/whatsapp/repo.js
-const { getDb } = require('../../core/db');
+const logger = require('../../core/logger');
 
-function logWhatsapp(payload = {}) {
-  const db = getDb();
+const whatsappLogs = [];
 
-  try {
-    // Tabloyu garanti et
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS whatsapp_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        lead_id INTEGER,
-        phone TEXT,
-        message TEXT,
-        meta_json TEXT,
-        created_at TEXT DEFAULT (datetime('now'))
-      )
-    `);
+function logWhatsapp({ leadId = null, phone = null, message, meta = {} }) {
+  const entry = {
+    id: whatsappLogs.length + 1,
+    ts: new Date().toISOString(),
+    lead_id: leadId,
+    phone,
+    message,
+    meta,
+  };
 
-    const {
-      leadId = null,
-      phone = null,
-      message = null,
-      meta = {}
-    } = payload;
+  whatsappLogs.push(entry);
 
-    const stmt = db.prepare(`
-      INSERT INTO whatsapp_logs (lead_id, phone, message, meta_json)
-      VALUES (?, ?, ?, ?)
-    `);
-
-    const result = stmt.run(
-      leadId,
-      phone,
-      message,
-      JSON.stringify(meta || {})
-    );
-
-    return {
-      ok: true,
-      id: result.lastInsertRowid
-    };
-  } catch (err) {
-    console.error('[whatsapp_logs] insert failed:', err.message);
-
-    return {
-      ok: false,
-      error: err.message
-    };
+  if (logger && typeof logger.info === 'function') {
+    logger.info('[WHATSAPP][LOG]', entry);
+  } else {
+    console.log('[WHATSAPP][LOG]', entry);
   }
+
+  return entry;
+}
+
+function listWhatsappLogs(limit = 50) {
+  if (!Number.isFinite(limit) || limit <= 0) return [];
+  return whatsappLogs.slice(-limit);
 }
 
 module.exports = {
-  logWhatsapp
+  logWhatsapp,
+  listWhatsappLogs,
 };
