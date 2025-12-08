@@ -1,70 +1,91 @@
 // backend-v2/src/modules/godmode/workers/dataFeederWorker.js
-const godmodeService = require('../service');
 
-/**
- * Şimdilik v1: MOCK DISCOVERY RUNNER
- *
- * - Job'ı running → completed'e geçirir
- * - Kriterlere göre "fake" istatistik üretir
- * - Gerçek tarama / discovery modülleri Faz 2.x'te bağlanacak
- */
+const { getDb } = require('../../../core/db');
 
-function estimateLeadCounts(criteria) {
-  const base = criteria?.categories?.length || 1;
-  const maxResults = criteria?.maxResults || 100;
+function buildLeadRow(lead, job) {
+  const criteria = job.criteria || {};
+  const city = lead.city || criteria.city || null;
+  const country = lead.country || criteria.country || null;
 
-  // Basit bir tahmin heuristiği (mock)
-  const found = Math.min(maxResults, base * 50);
-  const enriched = Math.round(found * 0.7);
-
-  return { found, enriched };
+  return {
+    name: lead.name || null,
+    address: lead.address || null,
+    city,
+    country,
+    category: Array.isArray(lead.types) && lead.types.length > 0 ? lead.types[0] : null,
+    phone: null,
+    website: null,
+    google_place_id: lead.place_id,
+    google_rating:
+      typeof lead.rating === 'number' ? lead.rating : null,
+    google_user_ratings_total: lead.user_ratings_total || 0,
+    source: 'godmode',
+    created_at: new Date().toISOString(),
+  };
 }
 
-async function runDiscoveryJob(jobId) {
-  const job = godmodeService.getJobById(jobId);
-  if (!job) {
-    throw new Error('Job bulunamadı.');
-  }
-  if (job.type !== 'discovery_scan') {
-    throw new Error('Sadece discovery_scan tipindeki job çalıştırılabilir.');
-  }
-  if (job.status === 'running') {
-    throw new Error('Job zaten running durumda.');
-  }
-  if (job.status === 'completed') {
-    throw new Error('Job zaten completed.');
+/**
+ * Discovery sonucunda gelen lead’leri potential_leads tablosuna yazar.
+ * google_place_id UNIQUE olduğu için INSERT OR UPDATE davranıyoruz.
+ */
+function feedDiscoveryResults(job, leads) {
+  if (!Array.isArray(leads) || leads.length === 0) {
+    return { upserted: 0 };
   }
 
-  // 1) running'e al
-  godmodeService.setJobRunning(jobId);
+  const db = getDb();
 
-  // 2) Şimdilik "instant" mock çalıştırma (bloklamıyor çünkü küçük iş)
-  const { found, enriched } = estimateLeadCounts(job.criteria);
+  const upsertStmt = db.prepare(`
+    INSERT INTO potential_leads (
+      name,
+      address,
+      city,
+      country,
+      category,
+      phone,
+      website,
+      google_place_id,
+      google_rating,
+      google_user_ratings_total,
+      source,
+      created_at
+    ) VALUES (
+      @name,
+      @address,
+      @city,
+      @country,
+      @category,
+      @phone,
+      @website,
+      @google_place_id,
+      @google_rating,
+      @google_user_ratings_total,
+      @source,
+      @created_at
+    )
+    ON CONFLICT(google_place_id) DO UPDATE SET
+      name = excluded.name,
+      address = excluded.address,
+      city = excluded.city,
+      country = excluded.country,
+      category = excluded.category,
+      google_rating = excluded.google_rating,
+      google_user_ratings_total = excluded.google_user_ratings_total,
+      source = excluded.source
+  `);
 
-  const resultSummary = {
-    engine_version: 'v1.0.0-mock',
-    notes:
-      'Bu sonuçlar şimdilik demo amaçlıdır. Gerçek çok-kaynaklı discovery entegrasyonu Faz 2 OMNI-DATA FEEDER ile bağlanacaktır.',
-    criteria_snapshot: job.criteria,
-    stats: {
-      found_leads: found,
-      enriched_leads: enriched,
-      providers_used: job.criteria.channels || ['google_places'],
-    },
-  };
+  const tx = db.transaction(items => {
+    for (const lead of items) {
+      const row = buildLeadRow(lead, job);
+      upsertStmt.run(row);
+    }
+  });
 
-  const updated = godmodeService.setJobCompleted(
-    jobId,
-    {
-      found_leads: found,
-      enriched_leads: enriched,
-    },
-    resultSummary,
-  );
+  tx(leads);
 
-  return updated;
+  return { upserted: leads.length };
 }
 
 module.exports = {
-  runDiscoveryJob,
+  feedDiscoveryResults,
 };

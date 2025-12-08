@@ -10,6 +10,9 @@ const {
   getJobById: getJobFromDb,
 } = require('./repo');
 
+const { runDiscoveryProviders } = require('./providers/providersRunner');
+const { feedDiscoveryResults } = require('./workers/dataFeederWorker');
+
 /**
  * In-memory job store (v1.x) + SQLite sync
  */
@@ -326,22 +329,15 @@ async function runGooglePlacesDiscovery(criteria) {
  * LIVE discovery engine wrapper
  */
 async function runDiscoveryJobLive(job) {
-  const { criteria } = job;
+  const criteria = job.criteria || {};
 
-  const providerResults = [];
-  let allLeads = [];
+  const {
+    leads,
+    providers_used,
+    used_categories,
+  } = await runDiscoveryProviders(criteria);
 
-  if (
-    criteria.channels &&
-    Array.isArray(criteria.channels) &&
-    criteria.channels.includes('google_places')
-  ) {
-    const gp = await runGooglePlacesDiscovery(criteria);
-    providerResults.push(gp);
-    allLeads = allLeads.concat(gp.leads || []);
-  }
-
-  const foundLeads = allLeads.length;
+  const foundLeads = Array.isArray(leads) ? leads.length : 0;
   const enrichedLeads = Math.round(foundLeads * 0.7);
 
   job.progress = {
@@ -349,6 +345,16 @@ async function runDiscoveryJobLive(job) {
     found_leads: foundLeads,
     enriched_leads: enrichedLeads,
   };
+
+  // Tüm lead'leri DB'ye akıt
+  if (foundLeads > 0) {
+    feedDiscoveryResults(job, leads);
+  }
+
+  const sampleSize =
+    typeof criteria.maxResults === 'number' && criteria.maxResults > 0
+      ? criteria.maxResults
+      : foundLeads;
 
   job.result_summary = {
     engine_version: 'v1.0.0-live',
@@ -358,9 +364,13 @@ async function runDiscoveryJobLive(job) {
     stats: {
       found_leads: foundLeads,
       enriched_leads: enrichedLeads,
-      providers_used: ['google_places'],
+      providers_used,
+      used_categories,
     },
-    sample_leads: allLeads.slice(0, 20),
+    // Burada artık maxResults kadarını göstereceğiz.
+    sample_leads: Array.isArray(leads)
+      ? leads.slice(0, sampleSize)
+      : [],
   };
 }
 

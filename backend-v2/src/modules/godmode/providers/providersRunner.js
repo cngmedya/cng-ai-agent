@@ -1,26 +1,34 @@
-"use strict";
+// backend-v2/src/modules/godmode/providers/providersRunner.js
 
-const { discoverWithGooglePlaces, providerKey: googlePlacesKey } = require("./googlePlacesProvider");
+const { runGooglePlacesDiscovery } = require('./googlePlacesProvider');
 
-async function runDiscoveryProviders(criteria = {}) {
-  const results = [];
+async function runDiscoveryProviders(criteria) {
+  const leads = [];
+  const providersUsed = [];
+  const usedCategories = [];
 
-  const googleResult = await discoverWithGooglePlaces(criteria);
-  results.push(googleResult);
+  const channels = Array.isArray(criteria?.channels)
+    ? criteria.channels
+    : ['google_places'];
 
-  const aggregated = {
-    providers: results.map(r => r.provider),
-    stats: {
-      found_leads: results.reduce((sum, r) => sum + (r.stats?.found_leads || 0), 0),
-      enriched_leads: results.reduce((sum, r) => sum + (r.stats?.enriched_leads || 0), 0)
-    },
-    leads: results.flatMap(r => r.leads || []),
-    raw_by_provider: results
+  if (channels.includes('google_places')) {
+    const gp = await runGooglePlacesDiscovery(criteria);
+    providersUsed.push('google_places');
+    if (Array.isArray(gp.used_categories)) {
+      usedCategories.push(...gp.used_categories);
+    }
+    if (Array.isArray(gp.leads)) {
+      leads.push(...gp.leads);
+    }
+  }
+
+  return {
+    leads,
+    providers_used: Array.from(new Set(providersUsed)),
+    used_categories: Array.from(new Set(usedCategories)),
   };
-
-  return aggregated;
 }
 
 module.exports = {
-  runDiscoveryProviders
+  runDiscoveryProviders,
 };
