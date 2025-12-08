@@ -31,8 +31,8 @@ function isLiveDiscoveryMode() {
  */
 function getRoadmapPhases() {
   return {
-    phase1_core_bootstrap: 'done', // job modeli, run flow, mock + live engine
-    phase2_data_pipelines: 'pending', // multi-provider discovery + enrichment
+    phase1_core_bootstrap: 'done',        // job modeli, run flow, mock + live engine
+    phase2_data_pipelines: 'pending',     // multi-provider discovery + enrichment
     phase3_brain_integration: 'pending',
     phase4_automation: 'pending',
   };
@@ -155,6 +155,13 @@ function createDiscoveryJob(payload) {
   insertJob(job);
 
   return job;
+}
+
+/**
+ * Alias: controller createDiscoveryScanJob çağırıyor.
+ */
+function createDiscoveryScanJob(payload) {
+  return createDiscoveryJob(payload);
 }
 
 /**
@@ -358,7 +365,7 @@ async function runDiscoveryJobLive(job) {
 }
 
 /**
- * /api/godmode/jobs/:id/run
+ * Asıl runner
  */
 async function runDiscoveryJob(jobId) {
   const job = getJob(jobId) || getJobFromDb(jobId);
@@ -395,9 +402,18 @@ async function runDiscoveryJob(jobId) {
   }
 }
 
+/**
+ * Alias: controller runJob çağırıyor.
+ */
+async function runJob(jobId) {
+  return runDiscoveryJob(jobId);
+}
+
 module.exports = {
   getStatus,
   listJobs,
   createDiscoveryJob,
-  runDiscoveryJob,
+  createDiscoveryScanJob, // controller ile uyum
+  runDiscoveryJob,        // low-level
+  runJob,                 // controller alias
 };
