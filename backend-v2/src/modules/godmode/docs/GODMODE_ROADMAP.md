@@ -336,6 +336,35 @@ Providers:
 - [ ] Social presence  
 - [ ] Ad intelligence (Meta Ads / Google Ads tags)  
 
+## **2.E — Lead Freshness & Rescan Policy (New vs Known Leads)**
+
+Amaç: Aynı firmayı gereksiz yere tekrar tekrar ağır analizden geçirmeden, “yeni lead” ile “zaten bildiğimiz lead” ayrımını netleştirmek ve discovery sonuçlarını daha akıllı şekilde sınıflandırmak.
+
+- [ ] DB model geliştirmesi:
+  - [ ] `first_seen_at` alanı (lead ilk ne zaman keşfedildi?)
+  - [ ] `last_seen_at` alanı (en son hangi discovery job’ında görüldü?)
+  - [ ] `scan_count` alanı (kaç farklı discovery run’ında yakalandı?)
+  - [ ] `last_discovery_job_id` alanı (en son hangi job üzerinden geldi?)
+
+- [ ] Discovery davranışı:
+  - [ ] Yeni bir provider sonucu geldiğinde:
+    - [ ] Aynı `provider + provider_id` (örn. `google_places + place_id`) varsa:
+      - [ ] Yeni satır eklemeyip mevcut kaydı update et
+      - [ ] `scan_count` +1
+      - [ ] `last_seen_at` güncelle
+    - [ ] Yoksa:
+      - [ ] `first_seen_at` ve `last_seen_at` aynı olacak şekilde yeni lead oluştur
+      - [ ] `scan_count = 1`
+
+- [ ] Raporlama / filtreleme hazırlığı:
+  - [ ] “Sadece yeni lead’leri göster” filtresi için gerekli alanların netleştirilmesi
+  - [ ] “Zaten bilinen ama henüz temas edilmemiş lead’ler” gibi view’lar için lead CRM ile ortak alanların tasarlanması
+  - [ ] Faz 3’te kullanılacak “yeni vs. known” segmentleri için temel iş kurallarının yazılması
+
+- [ ] “Analizi güncelle” flow’una hazırlık:
+  - [ ] Lead intel tablosu için `intel_last_updated_at` ve `intel_freshness_state` alanlarının tasarlanması
+  - [ ] Discovery tarafında, gerekirse bir lead için “force refresh” (örneğin UI’de “Analizi güncelle” butonu) flag’ine cevap verebilecek hook’ların planlanması
+
 ---
 
 # FAZ 3 — BRAIN INTEGRATION (AI DECISION PIPELINE)
