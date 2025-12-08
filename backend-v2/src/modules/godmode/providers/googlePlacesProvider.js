@@ -1,10 +1,23 @@
 // backend-v2/src/modules/godmode/providers/googlePlacesProvider.js
 
+/**
+ * Google Places Provider (GODMODE PAL compatible)
+ *
+ * Bu modül, Provider Abstraction Layer (PAL) için standart interface'i
+ * uygulayan Google Places discovery provider'ıdır.
+ *
+ * Zorunlu alanlar:
+ *  - id: 'google_places'
+ *  - label: string
+ *  - channels: string[]
+ *  - async discover(criteria, ctx?) -> { leads, stats, errors }
+ */
+
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
 
 if (!GOOGLE_PLACES_API_KEY) {
   // Bu modül yüklendiğinde env yoksa da patlamasın,
-  // sadece run sırasında hata fırlatacağız.
+  // sadece run/discover sırasında hata fırlatacağız.
 }
 
 async function callGooglePlacesTextSearch(url) {
@@ -19,6 +32,10 @@ async function callGooglePlacesTextSearch(url) {
   return data;
 }
 
+/**
+ * Eski core discovery fonksiyonumuz
+ * PAL discover() bunun üzerine oturuyor.
+ */
 async function runGooglePlacesDiscovery(criteria) {
   if (!GOOGLE_PLACES_API_KEY) {
     throw new Error('GOOGLE_PLACES_API_KEY tanımlı değil (.env).');
@@ -105,6 +122,49 @@ async function runGooglePlacesDiscovery(criteria) {
   };
 }
 
+// PAL interface implementation
+const id = 'google_places';
+const label = 'Google Places';
+const channels = ['google_places'];
+
+/**
+ * PAL uyumlu discover fonksiyonu.
+ *
+ * Dönüş formatı:
+ *  {
+ *    leads: Lead[],
+ *    stats: { provider_id, provider_label, used_categories, raw_providers_used },
+ *    errors: NormalizedProviderError[]
+ *  }
+ */
+async function discover(criteria, ctx = {}) {
+  // ctx şimdilik kullanılmıyor ama ileride tracing / jobId gibi bilgiler gelebilir.
+  const base = await runGooglePlacesDiscovery(criteria);
+
+  const leads = Array.isArray(base.leads) ? base.leads : [];
+  const usedCategories = Array.isArray(base.used_categories)
+    ? base.used_categories
+    : [];
+
+  const stats = {
+    provider_id: id,
+    provider_label: label,
+    used_categories: usedCategories,
+    raw_providers_used: base.providers_used || ['google_places'],
+  };
+
+  return {
+    leads,
+    stats,
+    errors: [],
+  };
+}
+
 module.exports = {
+  id,
+  label,
+  channels,
+  discover,
+  // Eski core fonksiyona ihtiyaç duyulursa diye export etmeye devam ediyoruz
   runGooglePlacesDiscovery,
 };

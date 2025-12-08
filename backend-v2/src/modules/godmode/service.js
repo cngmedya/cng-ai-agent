@@ -2,6 +2,7 @@
 
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
+const { runDiscoveryProviders } = require('./providers/providersRunner');
 
 const {
   loadAllJobs,
@@ -531,22 +532,31 @@ async function runGooglePlacesDiscovery(criteria, jobForLogging) {
 async function runDiscoveryJobLive(job) {
   const { criteria } = job;
 
-  const providerResults = [];
-  let allLeads = [];
-  let allProviderErrors = [];
+  // Multi-provider discovery runner (şu an sadece google_places aktif)
+  const discoveryResult = await runDiscoveryProviders(criteria, job);
 
-  if (
-    criteria.channels &&
-    Array.isArray(criteria.channels) &&
-    criteria.channels.includes('google_places')
-  ) {
-    const gp = await runGooglePlacesDiscovery(criteria, job);
-    providerResults.push(gp);
-    allLeads = allLeads.concat(gp.leads || []);
-    allProviderErrors = allProviderErrors.concat(gp.provider_errors || []);
-  }
+  const leads = Array.isArray(discoveryResult.leads)
+    ? discoveryResult.leads
+    : [];
 
-  const foundLeads = allLeads.length;
+  const providersUsed = Array.isArray(discoveryResult.providers_used)
+    ? discoveryResult.providers_used
+    : [];
+
+  const usedCategories = Array.isArray(discoveryResult.used_categories)
+    ? discoveryResult.used_categories
+    : [];
+
+  const providerErrors = Array.isArray(discoveryResult.provider_errors)
+    ? discoveryResult.provider_errors
+    : [];
+
+  const uniqueProvidersUsed = Array.from(new Set(providersUsed.filter(Boolean)));
+  const uniqueUsedCategories = Array.from(
+    new Set(usedCategories.filter(Boolean)),
+  );
+
+  const foundLeads = leads.length;
   const enrichedLeads = Math.round(foundLeads * 0.7);
 
   job.progress = {
@@ -556,25 +566,31 @@ async function runDiscoveryJobLive(job) {
   };
 
   const allProvidersFailed =
-    providerResults.length > 0 &&
+    uniqueProvidersUsed.length > 0 &&
     foundLeads === 0 &&
-    allProviderErrors.length > 0;
+    providerErrors.length > 0;
 
   job.result_summary = {
-    engine_version: 'v1.0.0-live',
+    engine_version: 'v1.1.0-live-faz2',
     notes:
-      'Gerçek Google Places discovery çalıştırıldı. Faz 2’de multi-provider entegrasyon ve otomatik enrichment eklenecek.',
+      'Multi-provider hazır discovery engine. Şu an sadece google_places aktif.\nFaz 2’de diğer providerlar eklenecek.',
     criteria_snapshot: criteria,
+
+    // Faz 2 için kritik alanlar (root)
+    providers_used: uniqueProvidersUsed,
+    used_categories: uniqueUsedCategories,
+    provider_errors: providerErrors,
+
+    // Ek metrikler
     stats: {
       found_leads: foundLeads,
       enriched_leads: enrichedLeads,
-      providers_used: providerResults
-        .map(p => p.providers_used || [])
-        .flat()
-        .filter((v, i, arr) => arr.indexOf(v) === i),
+      providers_used: uniqueProvidersUsed,
+      used_categories: uniqueUsedCategories,
     },
-    sample_leads: allLeads.slice(0, 50),
-    provider_errors: allProviderErrors,
+
+    // Örnek lead’ler
+    sample_leads: leads.slice(0, 50),
   };
 
   if (allProvidersFailed) {
