@@ -17,6 +17,7 @@ Bu faz tamamlandığında:
 - Manual-run destekleyen
 - Tek provider (Google Places) çalışan, **SQLite kalıcı job store’a sahip**
 - Sağlam validation + provider error handling katmanına sahip
+- Job event log sistemiyle izlenebilirliği yüksek
 
 tam bir MVP hazır olur.
 
@@ -179,6 +180,8 @@ Backend restart olsa bile discovery job geçmişi ve sonuçları kaybolmuyor.
   - Farklı payload’larla (`maxResults=50`, `maxResults=100`, `maxResults=500`) İstanbul discovery çalıştırıldı ve job listesi üzerinden doğrulandı.
 - [x] **GODMODE bootstrap logları:**  
   - DB tabloları henüz yokken alınan `no such table` hataları temizlendi; şu an bootstrap aşaması temiz log ile çalışıyor.
+- [x] **DB path standardizasyonu:**  
+  - Tüm GODMODE ve lead/CRM modülleri tek `src/data/app.sqlite` dosyasına taşındı; eski `data/app.sqlite` kaldırılarak legacy kalıntılar temizlendi.
 
 ---
 
@@ -252,29 +255,29 @@ Bu adımın amacı:
 
 ---
 
-### **1.G.5 — Job Event Log System (v1.0.0) ⬜ (Planlandı)**
+### **1.G.5 — Job Event Log System (v1.0.0) ✅**
 
 Amaç: Her job için adım adım event geçmişi tutmak (debug + izlenebilirlik).
 
-- [ ] Yeni tablo: `godmode_job_logs`
-  - [ ] Kolonlar:
+- [x] Yeni tablo: `godmode_job_logs`
+  - [x] Kolonlar:
     - `id` (INTEGER, PRIMARY KEY AUTOINCREMENT)
     - `job_id` (TEXT, INDEX)
-    - `event_type` (TEXT) — örn: `CREATED`, `RUN_STARTED`, `PROVIDER_CALL`, `COMPLETED`, `FAILED`
+    - `event_type` (TEXT) — örn: `QUEUED`, `RUN_START`, `PROVIDER_PAGE`, `COMPLETED`, `FAILED`
     - `payload_json` (TEXT) — isteğe bağlı detay (provider, hata objesi, vs.)
     - `created_at` (TEXT)
-- [ ] Repo fonksiyonları:
-  - [ ] `appendJobLog(jobId, eventType, payload?)`
-  - [ ] `getJobLogs(jobId)`
-- [ ] Service entegrasyonu:
-  - [ ] Job create aşamasında `CREATED` log’u
-  - [ ] Run başında `RUN_STARTED`
-  - [ ] Her provider çalıştırıldığında `PROVIDER_CALL`
-  - [ ] Success durumda `COMPLETED`
-  - [ ] Hata durumunda `FAILED` + error payload
-- [ ] Smoke test:
-  - [ ] 1 job create + run
-  - [ ] `SELECT * FROM godmode_job_logs WHERE job_id = ?` ile adım adım geçmiş doğrulama
+- [x] Repo fonksiyonları:
+  - [x] `appendJobLog(jobId, eventType, payload?)`
+  - [x] `getJobLogs(jobId)`
+- [x] Service entegrasyonu:
+  - [x] Job create aşamasında `QUEUED` log’u
+  - [x] Run başında `RUN_START`
+  - [x] Her provider sonuç sayfası okunduğunda `PROVIDER_PAGE`
+  - [x] Success durumda `COMPLETED`
+  - [x] Hata durumunda `FAILED` + error payload (ileride genişletmeye uygun)
+- [x] Smoke test:
+  - [x] Birden fazla job create + run
+  - [x] `sqlite3 src/data/app.sqlite "SELECT id, job_id, event_type, substr(created_at,1,19) FROM godmode_job_logs ORDER BY id DESC LIMIT 20;"` ile log akışının doğru sırada ve doğru event tipleriyle kaydedildiği doğrulandı.
 
 ---
 
@@ -295,6 +298,7 @@ Amaç: Discovery tamamlandığında ilerideki worker pipeline’larına hook ata
   - [x] Console log’larda hem `WORKER_STUB` hem de `PIPELINE` mesajlarının görülmesi
 - [x] Faz 2 için hazır hook noktası:
   - [x] `dataFeederWorker` ileride gerçek queue/worker sistemine (BullMQ, custom queue vs.) bağlanabilecek şekilde izole edildi.
+
 ---
 
 # FAZ 2 — OMNI-DATA FEEDER (MULTI PROVIDER DISCOVERY ENGINE)
