@@ -10,9 +10,6 @@ const {
   getJobById: getJobFromDb,
 } = require('./repo');
 
-const { runDiscoveryProviders } = require('./providers/providersRunner');
-const { feedDiscoveryResults } = require('./workers/dataFeederWorker');
-
 /**
  * In-memory job store (v1.x) + SQLite sync
  */
@@ -26,7 +23,8 @@ const jobs = new Map();
 function isLiveDiscoveryMode() {
   const raw = process.env.GODMODE_DISCOVERY_MODE;
   if (!raw) return false; // varsayılan: mock
-  return raw === '1' || raw.toLowerCase() === 'live';
+  const lowered = String(raw).toLowerCase();
+  return lowered === '1' || lowered === 'live' || lowered === 'true';
 }
 
 /**
@@ -103,6 +101,7 @@ function listJobs() {
 }
 
 /**
+ * 1.G.1 — Job Validation Layer
  * /api/godmode/jobs/discovery-scan
  * Discovery job create
  */
@@ -118,9 +117,48 @@ function createDiscoveryJob(payload) {
     notes,
   } = payload || {};
 
+  // Zorunlu alanlar
   if (!city || !country) {
-    throw new Error('city ve country alanları zorunludur.');
+    const err = new Error('city ve country alanları zorunludur.');
+    err.code = 'VALIDATION_ERROR';
+    throw err;
   }
+
+  // categories → array zorunluluğu (opsiyonel ama varsa array olmalı)
+  if (typeof categories !== 'undefined' && !Array.isArray(categories)) {
+    const err = new Error('categories alanı bir dizi (array) olmalıdır.');
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
+
+  // minGoogleRating 0–5 arası
+  let effectiveMinRating = 0;
+  if (typeof minGoogleRating === 'number') {
+    if (minGoogleRating < 0 || minGoogleRating > 5) {
+      const err = new Error(
+        'minGoogleRating değeri 0 ile 5 arasında olmalıdır.',
+      );
+      err.code = 'VALIDATION_ERROR';
+      throw err;
+    }
+    effectiveMinRating = minGoogleRating;
+  }
+
+  // maxResults hard limit ≤ 250
+  let effectiveMaxResults = 250;
+  if (typeof maxResults === 'number') {
+    if (maxResults <= 0) {
+      const err = new Error('maxResults 1 veya daha büyük olmalıdır.');
+      err.code = 'VALIDATION_ERROR';
+      throw err;
+    }
+    effectiveMaxResults = Math.min(maxResults, 250);
+  }
+
+  const effectiveChannels =
+    Array.isArray(channels) && channels.length > 0
+      ? channels
+      : ['google_places'];
 
   const id = uuidv4();
   const now = new Date().toISOString();
@@ -133,13 +171,9 @@ function createDiscoveryJob(payload) {
       city,
       country,
       categories: Array.isArray(categories) ? categories : [],
-      minGoogleRating:
-        typeof minGoogleRating === 'number' ? minGoogleRating : 0,
-      maxResults: typeof maxResults === 'number' ? maxResults : 250,
-      channels:
-        Array.isArray(channels) && channels.length > 0
-          ? channels
-          : ['google_places'],
+      minGoogleRating: effectiveMinRating,
+      maxResults: effectiveMaxResults,
+      channels: effectiveChannels,
       notes: notes || null,
     },
     status: 'queued',
@@ -161,7 +195,8 @@ function createDiscoveryJob(payload) {
 }
 
 /**
- * Alias: controller createDiscoveryScanJob çağırıyor.
+ * Eski çağrılar için alias:
+ * createDiscoveryScanJob → createDiscoveryJob
  */
 function createDiscoveryScanJob(payload) {
   return createDiscoveryJob(payload);
@@ -203,6 +238,36 @@ function markJobFailed(job, error) {
 }
 
 /**
+ * 1.G.2 — Provider Error Normalization helper
+ */
+function normalizeProviderError(provider, error) {
+  const message = error && error.message ? String(error.message) : String(error || '');
+  let errorCode = 'UNKNOWN';
+
+  // Basit pattern’ler — ileride genişletilebilir
+  if (message.includes('Google Places API HTTP error')) {
+    errorCode = 'HTTP_ERROR';
+  } else if (message.includes('Google Places API status:')) {
+    const parts = message.split('Google Places API status:');
+    if (parts[1]) {
+      errorCode = `STATUS_${parts[1].trim()}`;
+    } else {
+      errorCode = 'API_STATUS_ERROR';
+    }
+  } else if (message.includes('GOOGLE_PLACES_API_KEY tanımlı değil')) {
+    errorCode = 'MISSING_API_KEY';
+  } else if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
+    errorCode = 'NETWORK_ERROR';
+  }
+
+  return {
+    provider,
+    error_code: errorCode,
+    error_message: message,
+  };
+}
+
+/**
  * MOCK discovery engine (v1.0.0-mock)
  */
 async function runDiscoveryJobMock(job) {
@@ -227,6 +292,7 @@ async function runDiscoveryJobMock(job) {
       enriched_leads: enrichedLeads,
       providers_used: ['google_places'],
     },
+    provider_errors: [],
   };
 }
 
@@ -327,55 +393,81 @@ async function runGooglePlacesDiscovery(criteria) {
 
 /**
  * LIVE discovery engine wrapper
+ * 1.G.2 — Provider Error Normalization burada uygulanıyor.
  */
 async function runDiscoveryJobLive(job) {
-  const criteria = job.criteria || {};
+  const { criteria } = job;
 
-  const {
-    leads,
-    providers_used,
-    used_categories,
-  } = await runDiscoveryProviders(criteria);
+  const providerResults = [];
+  let allLeads = [];
+  const providerErrors = [];
 
-  const foundLeads = Array.isArray(leads) ? leads.length : 0;
-  const enrichedLeads = Math.round(foundLeads * 0.7);
+  // Şimdilik tek provider: google_places
+  if (
+    criteria.channels &&
+    Array.isArray(criteria.channels) &&
+    criteria.channels.includes('google_places')
+  ) {
+    try {
+      const gp = await runGooglePlacesDiscovery(criteria);
+      providerResults.push({
+        provider: 'google_places',
+        ...gp,
+      });
+      allLeads = allLeads.concat(gp.leads || []);
+    } catch (err) {
+      providerErrors.push(normalizeProviderError('google_places', err));
+    }
+  }
+
+  const foundLeads = allLeads.length;
+  const enrichedLeads = foundLeads > 0 ? Math.round(foundLeads * 0.7) : 0;
 
   job.progress = {
-    percent: 100,
+    percent: foundLeads > 0 ? 100 : 0,
     found_leads: foundLeads,
     enriched_leads: enrichedLeads,
   };
 
-  // Tüm lead'leri DB'ye akıt
-  if (foundLeads > 0) {
-    feedDiscoveryResults(job, leads);
-  }
-
-  const sampleSize =
-    typeof criteria.maxResults === 'number' && criteria.maxResults > 0
-      ? criteria.maxResults
-      : foundLeads;
+  const providersUsed =
+    providerResults.length > 0
+      ? Array.from(
+          new Set(
+            providerResults
+              .map(r => r.providers_used || [])
+              .flat()
+              .filter(Boolean),
+          ),
+        )
+      : [];
 
   job.result_summary = {
     engine_version: 'v1.0.0-live',
     notes:
-      'Gerçek Google Places discovery çalıştırıldı. Faz 2’de multi-provider entegrasyon ve otomatik enrichment eklenecek.',
+      providerErrors.length === 0
+        ? 'Gerçek Google Places discovery çalıştırıldı. Faz 2’de multi-provider entegrasyon ve otomatik enrichment eklenecek.'
+        : 'Discovery sırasında bazı provider hataları oluştu. Detaylar provider_errors alanında.',
     criteria_snapshot: criteria,
     stats: {
       found_leads: foundLeads,
       enriched_leads: enrichedLeads,
-      providers_used,
-      used_categories,
+      providers_used: providersUsed.length > 0 ? providersUsed : ['google_places'],
     },
-    // Burada artık maxResults kadarını göstereceğiz.
-    sample_leads: Array.isArray(leads)
-      ? leads.slice(0, sampleSize)
-      : [],
+    sample_leads: allLeads.slice(0, 20),
+    provider_errors: providerErrors,
   };
+
+  // Tüm provider’lar fail olduysa (ileride birden fazla provider olduğunda da çalışacak)
+  if (providerResults.length === 0 && providerErrors.length > 0) {
+    const aggregateError = new Error('ALL_PROVIDERS_FAILED');
+    aggregateError.code = 'ALL_PROVIDERS_FAILED';
+    aggregateError.provider_errors = providerErrors;
+    throw aggregateError;
+  }
 }
 
 /**
- * Asıl runner
+ * /api/godmode/jobs/:id/run
  */
 async function runDiscoveryJob(jobId) {
   const job = getJob(jobId) || getJobFromDb(jobId);
@@ -407,13 +499,15 @@ async function runDiscoveryJob(jobId) {
     markJobCompleted(job);
     return getJob(jobId);
   } catch (err) {
+    // Eğer ALL_PROVIDERS_FAILED ise, job.result_summary zaten provider_errors ile dolu.
     markJobFailed(job, err);
     throw err;
   }
 }
 
 /**
- * Alias: controller runJob çağırıyor.
+ * Eski çağrılar için alias:
+ * runJob → runDiscoveryJob
  */
 async function runJob(jobId) {
   return runDiscoveryJob(jobId);
@@ -423,7 +517,7 @@ module.exports = {
   getStatus,
   listJobs,
   createDiscoveryJob,
-  createDiscoveryScanJob, // controller ile uyum
-  runDiscoveryJob,        // low-level
-  runJob,                 // controller alias
+  createDiscoveryScanJob,
+  runDiscoveryJob,
+  runJob,
 };

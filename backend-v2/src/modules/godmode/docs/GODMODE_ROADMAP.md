@@ -124,6 +124,36 @@ Geliştirme & prod ortam yönetimi için.
 
 ---
 
+## **1.G — CORE HARDENING & STABILITY EXTENSIONS (Mini-Geliştirmeler)**  
+Faz 1 tamamlandıktan sonra sistemi production seviyesine yaklaştırmak için eklenen sağlamlaştırma adımları.
+
+### Yapılanlar
+- [x] **Job Validation Layer**
+  - [x] city / country zorunlu alan validasyonu  
+  - [x] categories → string array normalizasyonu  
+  - [x] minGoogleRating 0–5 arası clamp  
+  - [x] maxResults ≤ 250 hard-limit (üstü otomatik 250’ye çekiliyor)  
+  - [x] Payload format hataları için tutarlı error response modeli (`GODMODE_CREATE_JOB_ERROR`)  
+
+- [ ] **Provider Error Normalization**
+  - Google Places hatalarının normalize edilmesi  
+  - Tek tip provider error objesi: `{ provider, error_code, error_message }`  
+  - Job summary içine `provider_errors` ek alanı  
+  - Partial-success senaryoları için ayrıştırma  
+
+- [ ] **Job Event Log System**
+  - Yeni tablo: `godmode_job_logs`  
+  - Her job için adım adım event kaydı  
+  - Örnek: queued → running → provider page fetch → completed  
+  - Debugging & monitoring için güçlü temel  
+
+- [ ] **Worker Orchestration Stub Integration**
+  - Discovery tamamlandığında worker tetikleme altyapısı  
+  - dataFeederWorker → temel tetik oluşturuldu  
+  - Faz 2’de genişletilecek worker pipeline’a hazırlık  
+
+---
+
 # FAZ 2 — OMNI-DATA FEEDER (MULTI PROVIDER DISCOVERY ENGINE)
 
 Bu faz ile GODMODE tek bir provider’dan (Google Places) çıkar ve gerçek bir **çok kaynaklı discovery motoruna** dönüşür.
