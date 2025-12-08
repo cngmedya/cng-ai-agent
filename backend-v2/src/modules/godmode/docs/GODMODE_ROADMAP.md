@@ -1,300 +1,226 @@
-# GODMODE DISCOVERY ENGINE — ROADMAP (VΩ)
+# GODMODE Discovery Engine — ROADMAP (v1.0)
 
-Bu belge, Godmode Discovery Engine'in tüm gelişim sürecini, modül mimarisini, ilerleme adımlarını ve tamamlanmış/bekleyen görevleri gösteren **resmi yol haritasıdır**.  
-Godmode, CNG AI Agent’ın **yeni nesil otomatik müşteri avlama sistemi** olup tüm sistemin “ana beyni” görevini üstlenir.
-
----
-
-## GENEL DURUM
-
-- **Modül:** GODMODE DISCOVERY ENGINE  
-- **Versiyon:** v1.0.0-live (Core ✓, Google Places LIVE v1 ✓)  
-- **Sorumlu:** CNG AI Agent — Discovery Division  
-- **Durum:** Aktif geliştirme (Faz 2 üzerinde çalışılıyor)  
-- **Öncelik:** En yüksek  
+Bu dosya, CNG AI Agent içerisinde yer alan **GODMODE Discovery Engine** modülünün full gelişim yol haritasıdır.  
+Her aşama Production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan maddeler işaretlenerek ilerleme takip edilir.
 
 ---
 
-## 🧭 MİSYON
+# 🟩 FAZ 1 — CORE DISCOVERY ENGINE (MVP → STABLE)
 
-Godmode Discovery Engine, dünyadaki tüm iş kollarında **potansiyel müşterileri otomatik bulmak, analiz etmek, zenginleştirmek ve satış pipeline'ına aktarmak** için geliştirilmiş ultra-akıllı bir modüldür.
+GODMODE'un temel iskeletinin kurulduğu fazdır. Bu faz tamamlandığında:
 
-Hedef:
+- Discovery işlerini başlatabilen
+- İş durumlarını yöneten
+- Mock ve gerçek veri arasında geçiş yapabilen
+- Manual-run destekleyen
+- Tek provider (Google Places) çalışan
 
-> **“Avlamadığımız firma kalmasın.”**
-
----
-
-## 🧱 MİMARİ ÖZET
-
-Godmode 7 ana fazdan oluşur:
-
-1. **Core module iskeleti (✓ Tamamlandı)**
-2. **OMNI-Data Feeder (çok kaynaklı tarama motoru — Google Places LIVE v1 tamam, genişleme bekliyor)**
-3. **Entity Resolution Engine (duplicate fusion AI)**
-4. **Economic Analyzer + Lead Genome Builder**
-5. **AI Worker Swarm (Otonom işçi ağı)**
-6. **Auto-CRM → Auto-Brain → Auto-Outreach pipeline entegrasyonu**
-7. **Frontend Godmode Dashboard**
-
-Tüm fazlar aşağıda detaylı şekilde checklist olarak sunulmuştur.
+tam bir MVP hazır olur.
 
 ---
 
-# ✅ FAZ 1 — GODMODE CORE (İSKELET) — *Durum: TAMAMLANDI*
+## **1.A — CORE MODULE BOOTSTRAP**
+Temel klasör, routing, servis ve controller yapıları.
 
-### Hedef
-
-- Tüm modülün dosya & klasör yapısını oluşturmak.  
-- API uçlarını tanımlamak.  
-- Worker ve provider mimarisinin temelini kurmak.
-
-### Görevler
-
-- [x] `modules/godmode/` ana klasör oluşturuldu  
-- [x] `api/controller.js`  
-- [x] `api/routes.js`  
-- [x] `service.js` (Godmode servis katmanı)  
-- [x] `workers/` klasörü (dataFeeder, economicAnalyzer, entityResolver iskeletleri)  
-- [x] `docs/GODMODE.md` ve `GODMODE_ROADMAP.md` oluşturuldu  
-- [x] `/api/godmode/jobs` API uçları:
-  - [x] `POST /jobs/discovery-scan` — discovery işi oluştur  
-  - [x] `GET /jobs` — tüm işleri listele  
-  - [x] `GET /jobs/:id` — tek işi getir  
-  - [x] `POST /jobs/:id/run` — işi çalıştır (engine’e bağlan)  
-- [x] In-memory job store (restart’a kadar RAM’de saklama)  
-- [x] Admin tarafında Godmode modül durumu görünebilir hale getirildi (admin modül statüsü v1.x)
-
-**Çıktı:**  
-Godmode modülü artık proje içinde tanımlı, API üzerinden iş yaratma/listeleme/çalıştırma akışı sorunsuz çalışıyor.
+### Görevler:
+- [x] `modules/godmode/` klasör ağacı kuruldu
+- [x] API → `/api/godmode/*` routing sistemi tamamlandı
+- [x] Controller → temel endpointler oluşturuldu
+- [x] Service → temel job yönetimi iskeleti yazıldı
+- [x] Workers → 3 temel worker dosyası oluşturuldu  
+  (`dataFeederWorker`, `entityResolverWorker`, `economicAnalyzerWorker`)
+- [x] GODMODE.md ve ROADMAP.md oluşturuldu
 
 ---
 
-# ⚙️ FAZ 2 — OMNI-DATA FEEDER (12 Veri Kaynağı Katmanı)  
-**Durum: Devam ediyor (v1.0.0-live: Google Places LIVE ✓)**
+## **1.B — JOB MANAGEMENT SYSTEM (Memory Store v1)**
 
-### Hedef
+Discovery işlerini memory üzerinde tutan prototip job sistemi.
 
-Dünyadaki tüm işletmeleri tarayabilmek için çoklu kaynaktan veri çekmek.  
-İlk üretim adımı olarak **Google Places LIVE v1** entegrasyonu tamamlandı.
-
-### Sağlanacak Katma Değer
-
-- Tek bir kaynağa bağlı kalmaz.  
-- Rekabet çok azalır.  
-- Lead çeşitliliği artar.  
-- “Fırsat boşluğu” yakalama kapasitesi yükselir.
-
----
-
-## 2.1 — v1.0.0-live — İlk Üretim Entegrasyonu (**TAMAMLANDI**)
-
-- [x] Discovery job akışı:
-  - [x] `POST /api/godmode/jobs/discovery-scan`
-  - [x] `POST /api/godmode/jobs/:id/run`
-- [x] Google Places ile canlı discovery:
-  - [x] Şehir, ülke, kategori, rating, maxResults parametreleriyle tarama  
-  - [x] Canlı Google Places API çağrısı üzerinden sonuç çekme  
-- [x] **Mock / Live switch**:
-  - [x] `GODMODE_GOOGLE_PLACES_MODE` env değişkeni:
-    - `mock` → demo / hızlı geliştirme  
-    - `live` → gerçek Google Places taraması  
-  - [x] Engine versiyon flag’leri:
-    - `engine_version: "v1.0.0-mock"`
-    - `engine_version: "v1.0.0-live"`
-- [x] Sonuç formatı:
-  - [x] `progress.found_leads` & `progress.enriched_leads` alanları  
-  - [x] `result_summary.stats`:
-    - [x] `found_leads`
-    - [x] `enriched_leads`
-    - [x] `providers_used` (örn: `["google_places"]`)
-  - [x] `result_summary.sample_leads[]`:
-    - [x] `provider`
-    - [x] `place_id`
-    - [x] `name`
-    - [x] `address`
-    - [x] `city`
-    - [x] `country`
-    - [x] `rating`
-    - [x] `user_ratings_total`
-    - [x] `types`
-    - [x] `business_status`
-    - [x] `location.lat / location.lng`
-    - [x] `raw.reference` (Google ref)
-
-**Çıktı (v1.0.0-live):**  
-Godmode, İstanbul gibi bir şehir için **gerçek Google Places datasıyla** discovery-scan çalıştırabiliyor, job sonuçlarında istatistikleri ve örnek lead listesini gösterebiliyor.
+### Görevler:
+- [x] In-memory JOB STORE yazıldı
+- [x] `/jobs` → tüm işlerin listesi
+- [x] `/jobs/:id` → tek işin detayları
+- [x] `/jobs/discovery-scan` → yeni discovery job oluşturma
+- [x] Job creation → UUID + criteria snapshot
+- [x] Job status: `queued`, `running`, `completed`, `failed`
+- [x] Job progress alanları:  
+  - percent  
+  - found_leads  
+  - enriched_leads  
 
 ---
 
-## 2.2 — v1.1+ — Multi-Provider OMNI-Data Feeder (HENÜZ BAŞLAMADI)
+## **1.C — MOCK DISCOVERY ENGINE → ÇALIŞIR HALE GETİRME**
 
-Bu bölüm henüz geliştirilmedi, roadmap’te geleceğe dönük olarak tutuluyor.
+Mock data ile çalışan discovery süreci.
 
-### Providers klasörü (plan)
-
-- [ ] Bing Places Provider  
-- [ ] Yandex Maps Provider  
-- [ ] Apple Maps Provider  
-- [ ] LinkedIn Provider  
-- [ ] Instagram Provider  
-- [ ] Facebook Provider  
-- [ ] TikTok Provider  
-- [ ] Domain Lookup Provider  
-- [ ] Business Registry Provider (MERSİS / ticaret sicil vb.)  
-- [ ] News Provider (sektörel haberler)  
-- [ ] Directories Provider (YellowPages, Yelp, Zomato vb.)
-
-### Orchestrator (plan)
-
-- [ ] `providersRunner` (aynı işi birden çok provider’a paralel yayan katman)  
-- [ ] Provider health-check mekanizması  
-- [ ] Provider rate-limiter (API limitlerini akıllı yönetim)
-
-### GeoMesh Tarama Motoru (plan)
-
-- [ ] `geocellGenerator` (şehir/ülke bazlı grid üretimi)  
-- [ ] `geocellIterator` (grid grid tarama mantığı)
-
-**Çıktı (hedef):**  
-Godmode onlarca kaynaktan aynı anda veri alabilen bir **tarama canavarına** dönüşür.
+### Görevler:
+- [x] Mock provider oluşturuldu
+- [x] Fake discovery sonuçları generate ediliyor
+- [x] Fake enrichment hesaplaması yapılıyor
+- [x] Job progress %100’e tamamlanıyor
+- [x] Örnek lead listesi result_summary içerisine yazıldı
+- [x] Manual run endpoint’i:  
+  - `POST /jobs/:id/run`
 
 ---
 
-# 🧬 FAZ 3 — ENTITY RESOLUTION ENGINE (Birleştirme Beyni)  
-**Durum: Beklemede**
+## **1.D — REAL DISCOVERY (Google Places API v1)**
 
-### Hedef
+Mock discovery → Gerçek Google Places API entegrasyonuna taşındı.
 
-Farklı kaynaklardan gelen aynı firmayı **tek profile dönüştürmek**.
-
-### Görevler
-
-- [ ] Duplicate Detector (AI + rule-based)  
-- [ ] Entity Fusion Engine  
-- [ ] Confidence Scoring  
-- [ ] `CleanFirm` JSON standardı  
-- [ ] Lead Attribute Normalizer  
-
-**Çıktı:**  
-Temiz, tekilleştirilmiş, yüksek doğruluklu firma profilleri.
+### Görevler:
+- [x] Provider: `google_places` eklendi
+- [x] `live` / `mock` switch sistemi eklendi  
+      Env: `GODMODE_PROVIDER_MODE=mock|live`
+- [x] Places Text Search → gerçek data alınıyor
+- [x] Place Detail → detaylı enrichment
+- [x] Real sample leads → job summary içine yazıldı
+- [x] Manual run gerçek data ile çalışıyor
 
 ---
 
-# 📊 FAZ 4 — ECONOMIC ANALYZER + LEAD GENOME  
-**Durum: Beklemede**
+## **1.E — CONFIGURATION SYSTEM (ENV + FLAGS)**
 
-### Hedef
+Discovery engine’in hem geliştirme hem prod ortamında yönetilebilmesi.
 
-Her firmanın “DNA”sını çıkaran analiz beyni.
-
-### Görevler
-
-- [ ] `revenueEstimator`  
-- [ ] `digitalMaturityScorer`  
-- [ ] `opportunityGenerator`  
-- [ ] `riskProfiler`  
-- [ ] `growthSignalDetector`  
-- [ ] `intentPredictor`  
-- [ ] `leadGenomeBuilder`  
-
-**Çıktı:**  
-Her lead için 360° ekonomi analizi + Lead Genome.
+### Görevler:
+- [x] `GODMODE_MAX_RESULTS`
+- [x] `GODMODE_PROVIDER_MODE` (mock/live)
+- [x] `GOOGLE_PLACES_API_KEY`
+- [x] “provider info” admin paneline eklendi (backend endpoint)
 
 ---
 
-# 🤖 FAZ 5 — AI WORKER SWARM (Otonom İşçi Ağı)  
-**Durum: Beklemede**
+## ❗ FAZ 1'DE KALAN SON BÜYÜK AŞAMA
 
-### Hedef
+# **1.F — JOB PERSISTENCE SYSTEM (SQLite v1.0)**  
+🔴 *ŞU ANKİ DURUM: BAŞLAMADI — SIRADAKİ ADIM*
 
-Otomatik tarama, analiz ve zenginleştirme yapan yapay zekâ sürüsü oluşturmak.
+GODMODE, şu an memory store üzerinde çalışıyor.  
+Bu kabul edilemez çünkü:
 
-### Worker Tipleri (plan)
+- Backend restart → tüm kayıtlar uçuyor  
+- Discovery işleri 1–10 dakika sürebilir  
+- Data analizi için geçmiş joblara ihtiyaç var  
+- Faz 2’nin Data Orkestrasyon Sistemi için zorunlu
 
-- [ ] GeoScan Worker  
-- [ ] Category Hunter Worker  
-- [ ] Social Proof Worker  
-- [ ] Domain Scanner Worker  
-- [ ] AI Enrichment Worker  
-- [ ] Opportunity Worker  
-- [ ] Outreach Connector Worker  
+### Yapılacaklar:
 
-### Ek Bileşenler (plan)
+#### **DB Şeması**
+- [ ] `godmode_jobs`  
+- [ ] `godmode_job_progress`  
+- [ ] `godmode_job_results`
 
-- [ ] Swarm Controller  
-- [ ] Priority Queue  
-- [ ] Self-Optimizing Algorithm  
+#### **Repo Layer**
+- [ ] Job create → DB insert  
+- [ ] Job update → DB update  
+- [ ] Job load → DB’den tüm jobları memory'e hydrate et  
+- [ ] Restart sonrası otomatik job reload
 
-**Çıktı:**  
-Godmode tam otonom hale gelir → tarar, bulur, analiz eder, pipeline’a atar.
+#### **Service Layer**
+- [ ] In-memory → DB store hibrit modele geçiş  
+- [ ] Yarım kalan jobları “failed” olarak işaretle  
+- [ ] Summary / result yazma mekanizması
 
----
-
-# 🔄 FAZ 6 — AUTO PIPELINE (CRM → BRAIN → OUTREACH)  
-**Durum: Beklemede**
-
-### Hedef
-
-Bulunan her lead otomatik olarak:
-
-1. CRM →  
-2. Brain →  
-3. Outreach →  
-4. OutreachScheduler →  
-5. Email/WhatsApp akışına girer.
-
-### Görevler
-
-- [ ] CRM auto-create  
-- [ ] CRM auto-enrich  
-- [ ] Brain auto-analysis  
-- [ ] Outreach auto-sequence  
-- [ ] Scheduler auto-enqueue  
-
-**Çıktı:**  
-“Zero-touch fully automated sales engine.”
+#### **Controller**
+- [ ] Endpoint’ler DB ile tam entegre hale getirilecek
 
 ---
 
-# 📺 FAZ 7 — GODMODE FRONTEND DASHBOARD  
-**Durum: Beklemede**
+# 🟦 FAZ 2 — OMNI-DATA FEEDER (MULTI PROVIDER DISCOVERY ENGINE)
 
-### Hedef
+Bu faz ile GODMODE gerçek bir veri avlama motoruna dönüşür.
 
-Godmode’un tüm işleyişini gerçek zamanlı gösteren premium arayüz.
+## **2.A — PROVIDER ABSTRACTION LAYER (PAL)**
+- [ ] Unified provider interface  
+- [ ] Provider health check sistemi  
+- [ ] Rate limit balancing
 
-### Ekranlar (plan)
+## **2.B — 5+ Discovery Provider Integration**
+Providers:
 
-- [ ] Discovery Command Center  
-- [ ] GeoMesh Explorer  
-- [ ] Data Source Dashboard  
-- [ ] Worker Swarm Monitor  
-- [ ] Lead Genome Analyzer  
-- [ ] Opportunity Radar  
-- [ ] Auto-Outreach Pipeline  
+- [ ] Google Places (mevcut → finalize edilmesi gerek)
+- [ ] LinkedIn Company Finder  
+- [ ] Instagram Business Search  
+- [ ] Facebook Business  
+- [ ] Yelp / Foursquare  
+- [ ] Gov / Chamber of Commerce (MERSİS vb.)
 
-**Çıktı:**  
-Dünyanın en iyi müşteri avlama arayüzü.
+## **2.C — Parallel Discovery Engine**
+- [ ] Aynı anda 5 provider taraması  
+- [ ] Duplicate merging system  
+- [ ] Source confidence score
 
----
-
-# ✔ CHECKPOINT (BURADAYIZ)
-
-| Faz | Açıklama              | Durum                                                   |
-|-----|-----------------------|---------------------------------------------------------|
-| 1   | Core iskelet          | **✓ Tamamlandı**                                       |
-| 2   | OMNI-Data Feeder      | **Devam ediyor — Google Places LIVE v1 hazır**         |
-| 3   | Entity Resolution     | Beklemede                                              |
-| 4   | Economic Analyzer     | Beklemede                                              |
-| 5   | Worker Swarm          | Beklemede                                              |
-| 6   | Auto Pipeline         | Beklemede                                              |
-| 7   | Godmode Dashboard     | Beklemede                                              |
+## **2.D — Deep Enrichment**
+- [ ] Website scraping (cheerio)  
+- [ ] Tech stack detection (Wappalyzer Lite)  
+- [ ] SEO signals  
+- [ ] Social presence  
+- [ ] Ad intelligence (Meta Ads / Google Ads tags)
 
 ---
 
-# Son Söz
+# 🟧 FAZ 3 — BRAIN INTEGRATION (AI DECISION PIPELINE)
 
-Bu dosya **resmi takip merkezimiz**dir.  
-Her ilerleme burada güncellenecek.  
-Her tik, Godmode’u **dünyanın en agresif ve akıllı firma avcısı** olmaya bir adım daha yaklaştırır.
+Discovery sonuçlarının otomatik analiz edilmesi.
+
+## **3.A — AI Lead Ranking**
+- [ ] Lead AI Score v2  
+- [ ] Opportunity score  
+- [ ] Risk score  
+- [ ] Category positioning
+
+## **3.B — Auto-SWOT**
+- [ ] Her lead için instant SWOT  
+- [ ] Pazar karşılaştırmalı SWOT  
+- [ ] Industry-fit değerlendirmesi
+
+## **3.C — Auto-Sales Entry Strategy**
+- [ ] Entry channel önerisi  
+- [ ] Açılış cümlesi  
+- [ ] Hızlı kazanım önerileri  
+- [ ] Red flag’lere göre uyarılar
+
+---
+
+# 🟥 FAZ 4 — FULL AUTOMATION & OUTREACH ECOSYSTEM (ENTERPRISE MODE)
+
+## **4.A — Autonomous Scanning**
+- [ ] Şehir / ülke bazlı otomatik discovery  
+- [ ] Sektör bazlı günlük taramalar  
+- [ ] Trend alert sistemi
+
+## **4.B — Auto-Enrichment Workers**
+- [ ] Queue-based worker cluster  
+- [ ] Çok aşamalı enrichment pipeline  
+- [ ] Retry & error recovery mekanizması
+
+## **4.C — Outreach Auto-Trigger**
+- [ ] Lead threshold > 80 ise otomatik outreach  
+- [ ] Outreach Scheduler entegrasyonu  
+- [ ] AI tarafından seçilen hedef setleri
+
+---
+
+# 🟪 FAZ 5 — ANALYTICS & INSIGHT HUB (GODMODE DASHBOARD)
+
+## **5.A — Discovery Metrics**
+- [ ] Provider-based accuracy  
+- [ ] Lead volume heatmap  
+- [ ] Günlük/haftalık tarama trendleri
+
+## **5.B — Lead Intelligence Reports**
+- [ ] Otomatik PDF raporları  
+- [ ] Sektörel raporlar  
+- [ ] Bölgesel fırsat haritaları
+
+---
+
+# 📌 NOTLAR
+- Bu roadmap her sprint sonunda güncellenecektir.
+- Yeni fazlar eklenebilir.
+- Öncelik her zaman Faz 1 → Faz 2 şeklinde ilerler.
+
+---
