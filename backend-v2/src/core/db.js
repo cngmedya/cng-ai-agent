@@ -15,6 +15,8 @@ let db;
  * - lead_crm_notes         → aramalar / toplantılar / whatsapp / email notları
  * - lead_crm_brains        → AI CRM beyni snapshot’ları
  * - godmode_jobs           → GODMODE discovery job’ları
+ * - godmode_job_progress   → GODMODE job progress (JOIN için)
+ * - godmode_job_results    → GODMODE job result snapshot (JOIN için)
  */
 function initSchema(dbInstance) {
   // Foreign key desteğini aç
@@ -114,7 +116,6 @@ function initSchema(dbInstance) {
   `);
 
   // GODMODE discovery job’ları için tablo
-  // src/modules/godmode/repo.js içindeki SELECT/INSERT/UPDATE’lerle uyumlu minimal şema
   dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS godmode_jobs (
       id TEXT PRIMARY KEY,            -- UUID
@@ -135,6 +136,46 @@ function initSchema(dbInstance) {
 
     CREATE INDEX IF NOT EXISTS idx_godmode_jobs_created_at
       ON godmode_jobs (created_at);
+  `);
+
+  // GODMODE job progress (JOIN için) – yeni kurulumlarda doğru şema
+  dbInstance.exec(`
+    CREATE TABLE IF NOT EXISTS godmode_job_progress (
+      job_id TEXT PRIMARY KEY,
+      percent INTEGER DEFAULT 0,      -- repo.js p.percent böyle bekliyor
+      found_leads INTEGER DEFAULT 0,
+      enriched_leads INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_godmode_job_progress_job_id
+      ON godmode_job_progress (job_id);
+  `);
+
+  // Eski şemadan gelen DB'ler için: percent kolonu yoksa ekle
+  try {
+    dbInstance.prepare('SELECT percent FROM godmode_job_progress LIMIT 1').get();
+  } catch (e) {
+    if (e && String(e.message).includes('no such column: percent')) {
+      dbInstance.exec(
+        "ALTER TABLE godmode_job_progress ADD COLUMN percent INTEGER DEFAULT 0"
+      );
+    }
+  }
+
+  // GODMODE job results (JOIN için, minimal şema)
+  dbInstance.exec(`
+    CREATE TABLE IF NOT EXISTS godmode_job_results (
+      job_id TEXT PRIMARY KEY,
+      result_summary_json TEXT,       -- ekstra / geleceğe dönük alan
+      raw_results_json TEXT,          -- detaylı sonuçlar için alan (şimdilik opsiyonel)
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_godmode_job_results_job_id
+      ON godmode_job_results (job_id);
   `);
 }
 
