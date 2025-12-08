@@ -2,20 +2,75 @@
 
 const { getDb } = require('../../core/db');
 
-function rowToJob(row) {
+/**
+ * MIGRATION: godmode_jobs tablosunda 'error' kolonu yoksa ekle
+ */
+function ensureJobsTableHasErrorColumn() {
+  const db = getDb();
+
+  try {
+    const cols = db.prepare(`PRAGMA table_info(godmode_jobs)`).all();
+    const hasError = cols.some(col => col.name === 'error');
+
+    if (!hasError) {
+      db.prepare(`ALTER TABLE godmode_jobs ADD COLUMN error TEXT`).run();
+      console.log('[GODMODE][MIGRATION] godmode_jobs.error kolonu eklendi.');
+    }
+  } catch (err) {
+    // Tablo yoksa ya da başka bir sebeple migration çalışamazsa
+    // server’ı düşürmeyelim; sadece log atalım.
+    console.warn(
+      '[GODMODE][MIGRATION] error column migration atlanıyor:',
+      err.message || err,
+    );
+  }
+}
+
+/**
+ * JOB EVENT LOG TABLE: godmode_job_logs
+ */
+function ensureJobLogTable() {
+  const db = getDb();
+
+  db.prepare(
+    `
+    CREATE TABLE IF NOT EXISTS godmode_job_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT,
+      created_at TEXT NOT NULL
+    )
+  `,
+  ).run();
+}
+
+// Modül yüklendiğinde migration + log tablosunu garanti altına al
+ensureJobsTableHasErrorColumn();
+ensureJobLogTable();
+
+/**
+ * INTERNAL: Job satırını domain job objesine map eder
+ */
+function mapRowToJob(row) {
   if (!row) return null;
 
-  const criteria = row.criteria_json ? JSON.parse(row.criteria_json) : null;
-  const resultSummary = row.result_summary_json
-    ? JSON.parse(row.result_summary_json)
-    : null;
+  let criteria = {};
+  let resultSummary = null;
 
-  const progress = {
-    percent: typeof row.percent === 'number' ? row.percent : 0,
-    found_leads: typeof row.found_leads === 'number' ? row.found_leads : 0,
-    enriched_leads:
-      typeof row.enriched_leads === 'number' ? row.enriched_leads : 0,
-  };
+  try {
+    criteria = row.criteria_json ? JSON.parse(row.criteria_json) : {};
+  } catch {
+    criteria = {};
+  }
+
+  try {
+    resultSummary = row.result_summary_json
+      ? JSON.parse(row.result_summary_json)
+      : null;
+  } catch {
+    resultSummary = null;
+  }
 
   return {
     id: row.id,
@@ -23,58 +78,58 @@ function rowToJob(row) {
     label: row.label,
     criteria,
     status: row.status,
-    progress,
+    progress: {
+      percent: row.progress_percent || 0,
+      found_leads: row.found_leads || 0,
+      enriched_leads: row.enriched_leads || 0,
+    },
     result_summary: resultSummary,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    error: row.error || null,
   };
 }
 
 /**
- * Tüm job’ları DB’den yükle (status + progress + result ile beraber).
+ * JOB CRUD
  */
-function loadAllJobs() {
-  const db = getDb();
 
-  const rows = db
-    .prepare(
-      `
-      SELECT
-        j.id,
-        j.type,
-        j.label,
-        j.criteria_json,
-        j.status,
-        j.created_at,
-        j.updated_at,
-        p.percent,
-        p.found_leads,
-        p.enriched_leads,
-        r.result_summary_json
-      FROM godmode_jobs j
-      LEFT JOIN godmode_job_progress p ON p.job_id = j.id
-      LEFT JOIN godmode_job_results r ON r.job_id = j.id
-      ORDER BY j.created_at DESC
-    `,
-    )
-    .all();
-
-  return rows.map(rowToJob);
-}
-
-/**
- * Yeni job insert.
- */
 function insertJob(job) {
   const db = getDb();
-  const now = job.created_at || new Date().toISOString();
+
+  const progress = job.progress || {};
+  const resultSummaryJson = job.result_summary
+    ? JSON.stringify(job.result_summary)
+    : null;
 
   db.prepare(
     `
     INSERT INTO godmode_jobs (
-      id, type, label, criteria_json, status, created_at, updated_at
+      id,
+      type,
+      label,
+      criteria_json,
+      status,
+      progress_percent,
+      found_leads,
+      enriched_leads,
+      result_summary_json,
+      error,
+      created_at,
+      updated_at
     ) VALUES (
-      @id, @type, @label, @criteria_json, @status, @created_at, @updated_at
+      @id,
+      @type,
+      @label,
+      @criteria_json,
+      @status,
+      @progress_percent,
+      @found_leads,
+      @enriched_leads,
+      @result_summary_json,
+      @error,
+      @created_at,
+      @updated_at
     )
   `,
   ).run({
@@ -83,124 +138,97 @@ function insertJob(job) {
     label: job.label || null,
     criteria_json: JSON.stringify(job.criteria || {}),
     status: job.status,
-    created_at: now,
-    updated_at: now,
+    progress_percent:
+      typeof progress.percent === 'number' ? progress.percent : 0,
+    found_leads:
+      typeof progress.found_leads === 'number' ? progress.found_leads : 0,
+    enriched_leads:
+      typeof progress.enriched_leads === 'number'
+        ? progress.enriched_leads
+        : 0,
+    result_summary_json: resultSummaryJson,
+    error: job.error || null,
+    created_at: job.created_at,
+    updated_at: job.updated_at,
   });
-
-  const progress = job.progress || {
-    percent: 0,
-    found_leads: 0,
-    enriched_leads: 0,
-  };
-
-  db.prepare(
-    `
-    INSERT INTO godmode_job_progress (
-      job_id, percent, found_leads, enriched_leads, updated_at
-    ) VALUES (
-      @job_id, @percent, @found_leads, @enriched_leads, @updated_at
-    )
-  `,
-  ).run({
-    job_id: job.id,
-    percent: progress.percent || 0,
-    found_leads: progress.found_leads || 0,
-    enriched_leads: progress.enriched_leads || 0,
-    updated_at: now,
-  });
-
-  if (job.result_summary) {
-    db.prepare(
-      `
-      INSERT INTO godmode_job_results (
-        job_id, result_summary_json, updated_at
-      ) VALUES (
-        @job_id, @result_summary_json, @updated_at
-      )
-    `,
-    ).run({
-      job_id: job.id,
-      result_summary_json: JSON.stringify(job.result_summary),
-      updated_at: now,
-    });
-  }
 
   return job;
 }
 
-/**
- * Status + progress + result güncelle.
- * (Job objesini komple alıyoruz, DB’ye sync ediyoruz.)
- */
 function updateJob(job) {
   const db = getDb();
-  const now = new Date().toISOString();
+
+  const progress = job.progress || {};
+  const resultSummaryJson = job.result_summary
+    ? JSON.stringify(job.result_summary)
+    : null;
 
   db.prepare(
     `
     UPDATE godmode_jobs
-    SET status = @status,
-        updated_at = @updated_at
+    SET
+      type = @type,
+      label = @label,
+      criteria_json = @criteria_json,
+      status = @status,
+      progress_percent = @progress_percent,
+      found_leads = @found_leads,
+      enriched_leads = @enriched_leads,
+      result_summary_json = @result_summary_json,
+      error = @error,
+      updated_at = @updated_at
     WHERE id = @id
   `,
   ).run({
     id: job.id,
+    type: job.type,
+    label: job.label || null,
+    criteria_json: JSON.stringify(job.criteria || {}),
     status: job.status,
-    updated_at: now,
+    progress_percent:
+      typeof progress.percent === 'number' ? progress.percent : 0,
+    found_leads:
+      typeof progress.found_leads === 'number' ? progress.found_leads : 0,
+    enriched_leads:
+      typeof progress.enriched_leads === 'number'
+        ? progress.enriched_leads
+        : 0,
+    result_summary_json: resultSummaryJson,
+    error: job.error || null,
+    updated_at: job.updated_at,
   });
-
-  const progress = job.progress || {
-    percent: 0,
-    found_leads: 0,
-    enriched_leads: 0,
-  };
-
-  db.prepare(
-    `
-    INSERT INTO godmode_job_progress (
-      job_id, percent, found_leads, enriched_leads, updated_at
-    ) VALUES (
-      @job_id, @percent, @found_leads, @enriched_leads, @updated_at
-    )
-    ON CONFLICT(job_id) DO UPDATE SET
-      percent = excluded.percent,
-      found_leads = excluded.found_leads,
-      enriched_leads = excluded.enriched_leads,
-      updated_at = excluded.updated_at
-  `,
-  ).run({
-    job_id: job.id,
-    percent: progress.percent || 0,
-    found_leads: progress.found_leads || 0,
-    enriched_leads: progress.enriched_leads || 0,
-    updated_at: now,
-  });
-
-  if (job.result_summary) {
-    db.prepare(
-      `
-      INSERT INTO godmode_job_results (
-        job_id, result_summary_json, updated_at
-      ) VALUES (
-        @job_id, @result_summary_json, @updated_at
-      )
-      ON CONFLICT(job_id) DO UPDATE SET
-        result_summary_json = excluded.result_summary_json,
-        updated_at = excluded.updated_at
-    `,
-    ).run({
-      job_id: job.id,
-      result_summary_json: JSON.stringify(job.result_summary),
-      updated_at: now,
-    });
-  }
 
   return job;
 }
 
-/**
- * Tek job’ı DB’den oku.
- */
+function loadAllJobs() {
+  const db = getDb();
+
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        id,
+        type,
+        label,
+        criteria_json,
+        status,
+        progress_percent,
+        found_leads,
+        enriched_leads,
+        result_summary_json,
+        error,
+        created_at,
+        updated_at
+      FROM godmode_jobs
+      ORDER BY created_at DESC
+    `,
+    )
+    .all();
+
+  return rows.map(mapRowToJob);
+}
+
 function getJobById(id) {
   const db = getDb();
 
@@ -208,31 +236,94 @@ function getJobById(id) {
     .prepare(
       `
       SELECT
-        j.id,
-        j.type,
-        j.label,
-        j.criteria_json,
-        j.status,
-        j.created_at,
-        j.updated_at,
-        p.percent,
-        p.found_leads,
-        p.enriched_leads,
-        r.result_summary_json
-      FROM godmode_jobs j
-      LEFT JOIN godmode_job_progress p ON p.job_id = j.id
-      LEFT JOIN godmode_job_results r ON r.job_id = j.id
-      WHERE j.id = ?
+        id,
+        type,
+        label,
+        criteria_json,
+        status,
+        progress_percent,
+        found_leads,
+        enriched_leads,
+        result_summary_json,
+        error,
+        created_at,
+        updated_at
+      FROM godmode_jobs
+      WHERE id = ?
     `,
     )
     .get(id);
 
-  return rowToJob(row);
+  return row ? mapRowToJob(row) : null;
+}
+
+/**
+ * JOB EVENT LOG SYSTEM (Faz 1.G — godmode_job_logs)
+ */
+
+function appendJobLog(jobId, eventType, payload) {
+  const db = getDb();
+
+  const createdAt = new Date().toISOString();
+
+  db.prepare(
+    `
+    INSERT INTO godmode_job_logs (
+      job_id,
+      event_type,
+      payload_json,
+      created_at
+    ) VALUES (
+      @job_id,
+      @event_type,
+      @payload_json,
+      @created_at
+    )
+  `,
+  ).run({
+    job_id: jobId,
+    event_type: eventType,
+    payload_json:
+      payload === undefined || payload === null
+        ? null
+        : JSON.stringify(payload),
+    created_at: createdAt,
+  });
+}
+
+function getJobLogs(jobId) {
+  const db = getDb();
+
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        id,
+        job_id,
+        event_type,
+        payload_json,
+        created_at
+      FROM godmode_job_logs
+      WHERE job_id = ?
+      ORDER BY id ASC
+    `,
+    )
+    .all(jobId);
+
+  return rows.map(row => ({
+    id: row.id,
+    job_id: row.job_id,
+    event_type: row.event_type,
+    payload: row.payload_json ? JSON.parse(row.payload_json) : null,
+    created_at: row.created_at,
+  }));
 }
 
 module.exports = {
-  loadAllJobs,
   insertJob,
   updateJob,
+  loadAllJobs,
   getJobById,
+  appendJobLog,
+  getJobLogs,
 };

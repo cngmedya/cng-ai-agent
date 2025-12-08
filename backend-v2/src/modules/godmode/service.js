@@ -8,6 +8,7 @@ const {
   insertJob,
   updateJob,
   getJobById: getJobFromDb,
+  appendJobLog,
 } = require('./repo');
 
 /**
@@ -23,8 +24,10 @@ const jobs = new Map();
 function isLiveDiscoveryMode() {
   const raw = process.env.GODMODE_DISCOVERY_MODE;
   if (!raw) return false; // varsayılan: mock
+
+  if (raw === '1') return true;
   const lowered = String(raw).toLowerCase();
-  return lowered === '1' || lowered === 'live' || lowered === 'true';
+  return lowered === 'live' || lowered === 'true';
 }
 
 /**
@@ -32,11 +35,52 @@ function isLiveDiscoveryMode() {
  */
 function getRoadmapPhases() {
   return {
-    phase1_core_bootstrap: 'done',        // job modeli, run flow, mock + live engine
-    phase2_data_pipelines: 'pending',     // multi-provider discovery + enrichment
+    phase1_core_bootstrap: 'done', // job modeli, run flow, mock + live engine
+    phase2_data_pipelines: 'pending', // multi-provider discovery + enrichment
     phase3_brain_integration: 'pending',
     phase4_automation: 'pending',
   };
+}
+
+/**
+ * INTERNAL: Job event log helper
+ */
+function logJobEvent(jobId, eventType, payload) {
+  try {
+    appendJobLog(jobId, eventType, payload || null);
+  } catch (err) {
+    // Observability failure, işin akışını bozmamalı
+    console.error(
+      '[GODMODE][JOB_LOG][ERROR]',
+      eventType,
+      'jobId=',
+      jobId,
+      err.message || err,
+    );
+  }
+}
+
+/**
+ * INTERNAL: Worker orchestration stub (Faz 1.G)
+ * Discovery tamamlandığında dataFeederWorker tetikleme noktası.
+ * Faz 2’de gerçek queue / worker pipeline ile değiştirilecek.
+ */
+function triggerPostDiscoveryWorkers(job) {
+  try {
+    console.log(
+      '[GODMODE][WORKER_STUB] dataFeederWorker would be triggered for job',
+      job.id,
+    );
+    // İlerleyen fazlarda:
+    // - Queue push
+    // - dataFeederWorker / entityResolverWorker / economicAnalyzerWorker entegrasyonu
+  } catch (err) {
+    console.error(
+      '[GODMODE][WORKER_STUB][ERROR] jobId=',
+      job.id,
+      err.message || err,
+    );
+  }
 }
 
 /**
@@ -51,7 +95,11 @@ function getRoadmapPhases() {
         job.status = 'failed';
         job.error =
           'Auto-recovery: previous run interrupted, job marked as failed.';
+        job.updated_at = new Date().toISOString();
         updateJob(job);
+        logJobEvent(job.id, 'FAILED_AUTO_RECOVERY', {
+          error: job.error,
+        });
       }
       jobs.set(job.id, job);
     });
@@ -101,11 +149,69 @@ function listJobs() {
 }
 
 /**
- * 1.G.1 — Job Validation Layer
+ * VALIDATION HELPERLARI (Faz 1.G.1)
+ */
+
+function clampMaxResults(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 50;
+  if (n > 250) return 250;
+  return n;
+}
+
+function validateDiscoveryPayload(payload) {
+  const errors = [];
+
+  if (!payload || typeof payload !== 'object') {
+    errors.push('Geçersiz istek gövdesi.');
+    return errors;
+  }
+
+  const { city, country, categories, minGoogleRating, maxResults } = payload;
+
+  if (!city || typeof city !== 'string') {
+    errors.push('city alanı zorunludur ve string olmalıdır.');
+  }
+
+  if (!country || typeof country !== 'string') {
+    errors.push('country alanı zorunludur ve string olmalıdır.');
+  }
+
+  if (categories !== undefined) {
+    if (!Array.isArray(categories)) {
+      errors.push('categories alanı bir dizi olmalıdır.');
+    }
+  }
+
+  if (minGoogleRating !== undefined) {
+    const r = Number(minGoogleRating);
+    if (!Number.isFinite(r) || r < 0 || r > 5) {
+      errors.push('minGoogleRating 0 ile 5 arasında bir sayı olmalıdır.');
+    }
+  }
+
+  if (maxResults !== undefined) {
+    const m = Number(maxResults);
+    if (!Number.isFinite(m) || m <= 0) {
+      errors.push('maxResults 0’dan büyük bir sayı olmalıdır.');
+    }
+  }
+
+  return errors;
+}
+
+/**
  * /api/godmode/jobs/discovery-scan
  * Discovery job create
  */
 function createDiscoveryJob(payload) {
+  const validationErrors = validateDiscoveryPayload(payload);
+  if (validationErrors.length > 0) {
+    const err = new Error(validationErrors.join(' '));
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
+
   const {
     label,
     city,
@@ -116,49 +222,6 @@ function createDiscoveryJob(payload) {
     channels,
     notes,
   } = payload || {};
-
-  // Zorunlu alanlar
-  if (!city || !country) {
-    const err = new Error('city ve country alanları zorunludur.');
-    err.code = 'VALIDATION_ERROR';
-    throw err;
-  }
-
-  // categories → array zorunluluğu (opsiyonel ama varsa array olmalı)
-  if (typeof categories !== 'undefined' && !Array.isArray(categories)) {
-    const err = new Error('categories alanı bir dizi (array) olmalıdır.');
-    err.code = 'VALIDATION_ERROR';
-    throw err;
-  }
-
-  // minGoogleRating 0–5 arası
-  let effectiveMinRating = 0;
-  if (typeof minGoogleRating === 'number') {
-    if (minGoogleRating < 0 || minGoogleRating > 5) {
-      const err = new Error(
-        'minGoogleRating değeri 0 ile 5 arasında olmalıdır.',
-      );
-      err.code = 'VALIDATION_ERROR';
-      throw err;
-    }
-    effectiveMinRating = minGoogleRating;
-  }
-
-  // maxResults hard limit ≤ 250
-  let effectiveMaxResults = 250;
-  if (typeof maxResults === 'number') {
-    if (maxResults <= 0) {
-      const err = new Error('maxResults 1 veya daha büyük olmalıdır.');
-      err.code = 'VALIDATION_ERROR';
-      throw err;
-    }
-    effectiveMaxResults = Math.min(maxResults, 250);
-  }
-
-  const effectiveChannels =
-    Array.isArray(channels) && channels.length > 0
-      ? channels
-      : ['google_places'];
 
   const id = uuidv4();
   const now = new Date().toISOString();
@@ -171,9 +234,13 @@ function createDiscoveryJob(payload) {
       city,
       country,
       categories: Array.isArray(categories) ? categories : [],
-      minGoogleRating: effectiveMinRating,
-      maxResults: effectiveMaxResults,
-      channels: effectiveChannels,
+      minGoogleRating:
+        typeof minGoogleRating === 'number' ? minGoogleRating : 0,
+      maxResults: clampMaxResults(maxResults),
+      channels:
+        Array.isArray(channels) && channels.length > 0
+          ? channels
+          : ['google_places'],
       notes: notes || null,
     },
     status: 'queued',
@@ -191,15 +258,12 @@ function createDiscoveryJob(payload) {
   jobs.set(job.id, job);
   insertJob(job);
 
-  return job;
-}
+  // Event log
+  logJobEvent(job.id, 'QUEUED', {
+    criteria: job.criteria,
+  });
 
-/**
- * Eski çağrılar için alias:
- * createDiscoveryScanJob → createDiscoveryJob
- */
-function createDiscoveryScanJob(payload) {
-  return createDiscoveryJob(payload);
+  return job;
 }
 
 /**
@@ -214,6 +278,10 @@ function markJobRunning(job) {
 
   jobs.set(job.id, job);
   updateJob(job);
+
+  logJobEvent(job.id, 'RUN_START', {
+    criteria: job.criteria,
+  });
 }
 
 function markJobCompleted(job) {
@@ -226,6 +294,11 @@ function markJobCompleted(job) {
 
   jobs.set(job.id, job);
   updateJob(job);
+
+  logJobEvent(job.id, 'COMPLETED', {
+    progress: job.progress,
+    stats: job.result_summary && job.result_summary.stats,
+  });
 }
 
 function markJobFailed(job, error) {
@@ -235,36 +308,61 @@ function markJobFailed(job, error) {
 
   jobs.set(job.id, job);
   updateJob(job);
+
+  logJobEvent(job.id, 'FAILED', {
+    error: job.error,
+  });
 }
 
 /**
- * 1.G.2 — Provider Error Normalization helper
+ * PROVIDER ERROR NORMALIZATION (Faz 1.G.2 / 1.G.3)
  */
 function normalizeProviderError(provider, error) {
-  const message = error && error.message ? String(error.message) : String(error || '');
-  let errorCode = 'UNKNOWN';
+  const base = {
+    provider,
+    error_code: 'UNKNOWN',
+    error_message: error && (error.message || String(error)),
+  };
 
-  // Basit pattern’ler — ileride genişletilebilir
-  if (message.includes('Google Places API HTTP error')) {
-    errorCode = 'HTTP_ERROR';
-  } else if (message.includes('Google Places API status:')) {
-    const parts = message.split('Google Places API status:');
-    if (parts[1]) {
-      errorCode = `STATUS_${parts[1].trim()}`;
-    } else {
-      errorCode = 'API_STATUS_ERROR';
-    }
-  } else if (message.includes('GOOGLE_PLACES_API_KEY tanımlı değil')) {
-    errorCode = 'MISSING_API_KEY';
-  } else if (error && (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT')) {
-    errorCode = 'NETWORK_ERROR';
+  if (!error) return base;
+
+  // HTTP status hataları
+  if (typeof error.status === 'number') {
+    return {
+      ...base,
+      error_code: 'HTTP_ERROR',
+      http_status: error.status,
+    };
   }
 
-  return {
-    provider,
-    error_code: errorCode,
-    error_message: message,
-  };
+  const message = String(error.message || error);
+
+  if (message.includes('GOOGLE_PLACES_API_KEY tanımlı değil')) {
+    return {
+      ...base,
+      error_code: 'MISSING_API_KEY',
+    };
+  }
+
+  if (message.includes('Google Places API status')) {
+    return {
+      ...base,
+      error_code: 'STATUS_ERROR',
+    };
+  }
+
+  if (
+    message.includes('ECONNRESET') ||
+    message.includes('ETIMEDOUT') ||
+    message.includes('ENOTFOUND')
+  ) {
+    return {
+      ...base,
+      error_code: 'NETWORK_ERROR',
+    };
+  }
+
+  return base;
 }
 
 /**
@@ -292,6 +390,7 @@ async function runDiscoveryJobMock(job) {
       enriched_leads: enrichedLeads,
       providers_used: ['google_places'],
     },
+    sample_leads: [],
     provider_errors: [],
   };
 }
@@ -301,7 +400,7 @@ async function runDiscoveryJobMock(job) {
  */
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
 
-async function runGooglePlacesDiscovery(criteria) {
+async function runGooglePlacesDiscovery(criteria, jobForLogging) {
   if (!GOOGLE_PLACES_API_KEY) {
     throw new Error('GOOGLE_PLACES_API_KEY tanımlı değil (.env).');
   }
@@ -316,6 +415,7 @@ async function runGooglePlacesDiscovery(criteria) {
 
   const leads = [];
   const usedCategories = [];
+  const providerErrors = [];
 
   const effectiveCategories =
     Array.isArray(categories) && categories.length > 0
@@ -331,24 +431,57 @@ async function runGooglePlacesDiscovery(criteria) {
     let pageCount = 0;
 
     do {
-      const url =
-        pageToken == null
-          ? `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(
-              query,
-            )}&key=${GOOGLE_PLACES_API_KEY}`
-          : `https://maps.googleapis.com/maps/api/place/textsearch/json?pagetoken=${pageToken}&key=${GOOGLE_PLACES_API_KEY}`;
-
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        throw new Error(`Google Places API HTTP error: ${resp.status}`);
+      let url;
+      if (pageToken == null) {
+        url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(
+          query,
+        )}&key=${GOOGLE_PLACES_API_KEY}`;
+      } else {
+        url = `https://maps.googleapis.com/maps/api/place/textsearch/json?pagetoken=${pageToken}&key=${GOOGLE_PLACES_API_KEY}`;
       }
 
-      const data = await resp.json();
-      if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
-        throw new Error(`Google Places API status: ${data.status}`);
+      let data;
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          const error = new Error(
+            `Google Places API HTTP error: ${resp.status}`,
+          );
+          error.status = resp.status;
+          throw error;
+        }
+
+        data = await resp.json();
+
+        if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+          throw new Error(`Google Places API status: ${data.status}`);
+        }
+      } catch (err) {
+        const normalized = normalizeProviderError('google_places', err);
+        providerErrors.push(normalized);
+
+        logJobEvent(jobForLogging.id, 'PROVIDER_ERROR', {
+          provider: 'google_places',
+          category: cat,
+          query,
+          error: normalized,
+        });
+
+        break;
       }
 
       const results = data.results || [];
+
+      // PROVIDER_PAGE event log’u
+      logJobEvent(jobForLogging.id, 'PROVIDER_PAGE', {
+        provider: 'google_places',
+        category: cat,
+        query,
+        page: pageCount + 1,
+        results_count: results.length,
+        accumulated_leads: leads.length,
+      });
+
       for (const r of results) {
         if (leads.length >= maxResults) break;
 
@@ -388,82 +521,66 @@ async function runGooglePlacesDiscovery(criteria) {
     leads,
     providers_used: ['google_places'],
     used_categories: usedCategories,
+    provider_errors: providerErrors,
   };
 }
 
 /**
  * LIVE discovery engine wrapper
- * 1.G.2 — Provider Error Normalization burada uygulanıyor.
  */
 async function runDiscoveryJobLive(job) {
   const { criteria } = job;
 
   const providerResults = [];
   let allLeads = [];
-  const providerErrors = [];
+  let allProviderErrors = [];
 
-  // Şimdilik tek provider: google_places
   if (
     criteria.channels &&
     Array.isArray(criteria.channels) &&
     criteria.channels.includes('google_places')
   ) {
-    try {
-      const gp = await runGooglePlacesDiscovery(criteria);
-      providerResults.push({
-        provider: 'google_places',
-        ...gp,
-      });
-      allLeads = allLeads.concat(gp.leads || []);
-    } catch (err) {
-      providerErrors.push(normalizeProviderError('google_places', err));
-    }
+    const gp = await runGooglePlacesDiscovery(criteria, job);
+    providerResults.push(gp);
+    allLeads = allLeads.concat(gp.leads || []);
+    allProviderErrors = allProviderErrors.concat(gp.provider_errors || []);
   }
 
   const foundLeads = allLeads.length;
-  const enrichedLeads = foundLeads > 0 ? Math.round(foundLeads * 0.7) : 0;
+  const enrichedLeads = Math.round(foundLeads * 0.7);
 
   job.progress = {
-    percent: foundLeads > 0 ? 100 : 0,
+    percent: 100,
     found_leads: foundLeads,
     enriched_leads: enrichedLeads,
   };
 
-  const providersUsed =
-    providerResults.length > 0
-      ? Array.from(
-          new Set(
-            providerResults
-              .map(r => r.providers_used || [])
-              .flat()
-              .filter(Boolean),
-          ),
-        )
-      : [];
+  const allProvidersFailed =
+    providerResults.length > 0 &&
+    foundLeads === 0 &&
+    allProviderErrors.length > 0;
 
   job.result_summary = {
     engine_version: 'v1.0.0-live',
     notes:
-      providerErrors.length === 0
-        ? 'Gerçek Google Places discovery çalıştırıldı. Faz 2’de multi-provider entegrasyon ve otomatik enrichment eklenecek.'
-        : 'Discovery sırasında bazı provider hataları oluştu. Detaylar provider_errors alanında.',
+      'Gerçek Google Places discovery çalıştırıldı. Faz 2’de multi-provider entegrasyon ve otomatik enrichment eklenecek.',
     criteria_snapshot: criteria,
     stats: {
       found_leads: foundLeads,
       enriched_leads: enrichedLeads,
-      providers_used:
-        providersUsed.length > 0 ? providersUsed : ['google_places'],
+      providers_used: providerResults
+        .map(p => p.providers_used || [])
+        .flat()
+        .filter((v, i, arr) => arr.indexOf(v) === i),
     },
-    sample_leads: allLeads.slice(0, 20),
-    provider_errors: providerErrors,
+    sample_leads: allLeads.slice(0, 50),
+    provider_errors: allProviderErrors,
   };
 
-  // Tüm provider’lar fail olduysa (ileride birden fazla provider olduğunda da çalışacak)
-  if (providerResults.length === 0 && providerErrors.length > 0) {
-    const aggregateError = new Error('ALL_PROVIDERS_FAILED');
-    aggregateError.code = 'ALL_PROVIDERS_FAILED';
-    aggregateError.provider_errors = providerErrors;
-    throw aggregateError;
+  if (allProvidersFailed) {
+    const err = new Error('Tüm provider çağrıları hata verdi.');
+    err.code = 'ALL_PROVIDERS_FAILED';
+    throw err;
   }
 }
 
@@ -498,27 +615,46 @@ async function runDiscoveryJob(jobId) {
     }
 
     markJobCompleted(job);
+
+    // Worker orchestration stub (Faz 1.G)
+    triggerPostDiscoveryWorkers(job);
+
     return getJob(jobId);
   } catch (err) {
-    // Eğer ALL_PROVIDERS_FAILED ise, job.result_summary zaten provider_errors ile dolu.
     markJobFailed(job, err);
     throw err;
   }
 }
 
 /**
- * Eski çağrılar için alias:
- * runJob → runDiscoveryJob
+ * Backward-compat aliases (v1.x → v1.0.0)
+ * Controller içinde hâlâ createDiscoveryScanJob / runJob kullanıldığı için
+ * bu alias'lar üzerinden yeni fonksiyonlara yönlendiriyoruz.
  */
+function createDiscoveryScanJob(payload) {
+  // Esas implementasyon: createDiscoveryJob
+  return createDiscoveryJob(payload);
+}
+
 async function runJob(jobId) {
+  // Esas implementasyon: runDiscoveryJob
   return runDiscoveryJob(jobId);
 }
 
 module.exports = {
+  // status & listing
   getStatus,
   listJobs,
+  getJob,
+
+  // job creation / run (yeni isimler)
   createDiscoveryJob,
-  createDiscoveryScanJob,
   runDiscoveryJob,
+
+  // backward-compat (eski isimleri kullanan controller'lar için)
+  createDiscoveryScanJob,
   runJob,
+
+  // log helper (1.G kapsamı)
+  appendJobLog,
 };

@@ -182,13 +182,14 @@ Backend restart olsa bile discovery job geçmişi ve sonuçları kaybolmuyor.
 
 ---
 
-## **1.G — Job Validation & Provider Error Handling (v1.0.0)**
+## **1.G — Job Validation, Provider Error Handling & Orchestration (v1.0.0)**
 
 Bu adımın amacı:
 
-- Discovery job creation request’lerini sağlam bir validation katmanından geçirmek
-- Provider kaynaklı hataları normalize edip `result_summary` içine yazmak
-- Tüm provider’lar fail olduğunda bile hataları kaybetmeden job seviyesinde görmek
+- Discovery job creation request’lerini sağlam bir validation katmanından geçirmek  
+- Provider kaynaklı hataları normalize edip `result_summary` içine yazmak  
+- Tüm provider’lar fail olduğunda bile hataları kaybetmeden job seviyesinde görmek  
+- Discovery bittikten sonra ilerideki pipeline’lara (workers, enrichment vb.) hook atacak temel orkestrasyon iskeletini kurmak
 
 ### **1.G.1 — Job Validation Layer ✅**
 
@@ -201,20 +202,24 @@ Bu adımın amacı:
   - [x] `err.code = "VALIDATION_ERROR"`
   - [x] Anlamlı Türkçe hata mesajları
 
+---
+
 ### **1.G.2 — Provider Error Normalization (Normal Case) ✅**
 
-- [x] `normalizeProviderError(provider, error)` helper’ı eklendi
+- [x] `normalizeProviderError(provider, error)` helper’ı eklendi  
 - [x] Başarılı discovery senaryosunda:
   - [x] `result_summary.provider_errors = []`
   - [x] `result_summary.stats.providers_used` alanı dolu (`["google_places"]`)
   - [x] `result_summary.sample_leads` içinde normalize edilmiş lead objeleri
 - [x] Normal akış test edildi:
-  - `POST /api/godmode/jobs/discovery-scan`
-  - `POST /api/godmode/jobs/:id/run`
+  - `POST /api/godmode/jobs/discovery-scan`  
+  - `POST /api/godmode/jobs/:id/run`  
   - Çıktıda:
     - `progress.percent = 100`
     - `sample_leads` dolu
     - `provider_errors = []`
+
+---
 
 ### **1.G.3 — Provider Error Handling (Failure Scenarios) ✅**
 
@@ -222,10 +227,10 @@ Bu adımın amacı:
   - Hata durumunda `normalizeProviderError('google_places', err)` ile tek tipe indirgeniyor
   - Normalize hata objesi: `{ provider, error_code, error_message }`
 - [x] Bilinen pattern’ler:
-  - `HTTP_ERROR` (HTTP status kodu kaynaklı)
-  - `STATUS_*` (Google Places `status` değerleri)
-  - `MISSING_API_KEY`
-  - `NETWORK_ERROR` (`ECONNRESET`, `ETIMEDOUT` vs.)
+  - [x] `HTTP_ERROR` (HTTP status kodu kaynaklı)
+  - [x] `STATUS_*` (Google Places `status` değerleri)
+  - [x] `MISSING_API_KEY`
+  - [x] `NETWORK_ERROR` (`ECONNRESET`, `ETIMEDOUT` vs.)
 - [x] Tüm provider’lar fail olduğunda:
   - [x] `ALL_PROVIDERS_FAILED` hatası fırlatılıyor (`err.code = "ALL_PROVIDERS_FAILED"`)
   - [x] Job DB’de `status = "failed"` olarak işaretleniyor
@@ -234,28 +239,62 @@ Bu adımın amacı:
 > Not: Bu flow, prod’da gerçek hata yaşandığında otomatik devreye girecek şekilde hazır.  
 > Gerekirse ileride özel bir failure test senaryosu için geçici olarak yanlış API key ile manuel test yapılabilir.
 
+---
+
 ### **1.G.4 — Provider Error Surfacing & Observability (v1.0.0) ✅**
 
-- [x] Tüm provider hataları job bazında `result_summary.provider_errors` içinde tutuluyor
-- [x] Job’ın `error` alanı, genel hata kodunu içeriyor (örn: `ALL_PROVIDERS_FAILED`)
+- [x] Tüm provider hataları job bazında `result_summary.provider_errors` içinde tutuluyor  
+- [x] Job’ın `error` alanı, genel hata kodunu içeriyor (örn: `ALL_PROVIDERS_FAILED`)  
 - [x] Gelecekteki dashboard / analytics fazları için veri modeli hazır:
   - Hangi provider’ın ne sıklıkla hata verdiği
   - Hangi error code’ların öne çıktığı
 - [x] Mock engine’de de `provider_errors: []` ile tutarlı response formatı sağlandı
 
-### **1.G.5 — Job Event Log System (Planlandı)**
+---
+
+### **1.G.5 — Job Event Log System (v1.0.0) ⬜ (Planlandı)**
+
+Amaç: Her job için adım adım event geçmişi tutmak (debug + izlenebilirlik).
 
 - [ ] Yeni tablo: `godmode_job_logs`
-- [ ] Her job için adım adım event kaydı
-- [ ] Örnek event akışı: `queued → running → provider_page_fetch → completed`
-- [ ] Debugging & monitoring için güçlü temel
+  - [ ] Kolonlar:
+    - `id` (INTEGER, PRIMARY KEY AUTOINCREMENT)
+    - `job_id` (TEXT, INDEX)
+    - `event_type` (TEXT) — örn: `CREATED`, `RUN_STARTED`, `PROVIDER_CALL`, `COMPLETED`, `FAILED`
+    - `payload_json` (TEXT) — isteğe bağlı detay (provider, hata objesi, vs.)
+    - `created_at` (TEXT)
+- [ ] Repo fonksiyonları:
+  - [ ] `appendJobLog(jobId, eventType, payload?)`
+  - [ ] `getJobLogs(jobId)`
+- [ ] Service entegrasyonu:
+  - [ ] Job create aşamasında `CREATED` log’u
+  - [ ] Run başında `RUN_STARTED`
+  - [ ] Her provider çalıştırıldığında `PROVIDER_CALL`
+  - [ ] Success durumda `COMPLETED`
+  - [ ] Hata durumunda `FAILED` + error payload
+- [ ] Smoke test:
+  - [ ] 1 job create + run
+  - [ ] `SELECT * FROM godmode_job_logs WHERE job_id = ?` ile adım adım geçmiş doğrulama
 
-### **1.G.6 — Worker Orchestration Stub Integration (Planlandı)**
+---
 
-- [ ] Discovery tamamlandığında worker tetikleme altyapısı
-- [ ] `dataFeederWorker` için temel tetik fonksiyonu
-- [ ] Faz 2’de genişletilecek worker pipeline’a hazırlık
+### **1.G.6 — Worker Orchestration Stub Integration (v1.0.0) ✅**
 
+Amaç: Discovery tamamlandığında ilerideki worker pipeline’larına hook atacak temel iskeleti kurmak.
+
+- [x] `dataFeederWorker` için stub entegrasyonu:
+  - [x] `runDiscoveryJob` tamamlandıktan sonra, job `status = "completed"` olduğunda worker tetikleme noktası çalışıyor
+  - [x] Şu an için log tabanlı stub:
+    - `[GODMODE][WORKER_STUB] dataFeederWorker would be triggered for job <jobId>`
+- [x] Lead pipeline entegrasyonu:
+  - [x] Discovery sonucundan gelen normalize lead listesi `potential_leads` tablosuna upsert ediliyor
+  - [x] Log:
+    - `[GODMODE][PIPELINE] potential_leads upsert tamamlandı. affected=<N>`
+- [x] Smoke test:
+  - [x] Valid job create + run
+  - [x] Console log’larda hem `WORKER_STUB` hem de `PIPELINE` mesajlarının görülmesi
+- [x] Faz 2 için hazır hook noktası:
+  - [x] `dataFeederWorker` ileride gerçek queue/worker sistemine (BullMQ, custom queue vs.) bağlanabilecek şekilde izole edildi.
 ---
 
 # FAZ 2 — OMNI-DATA FEEDER (MULTI PROVIDER DISCOVERY ENGINE)
