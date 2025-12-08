@@ -1,274 +1,366 @@
 # GODMODE Discovery Engine — ROADMAP (v1.0)
 
-Bu dosya, CNG AI Agent içerisinde yer alan **GODMODE Discovery Engine** modülünün tam gelişim yol haritasıdır.  
-Her faz tamamlandıkça işaretlenir ve yeni görevler sprint’lere göre eklenir.
+Bu dosya, CNG AI Agent içerisinde yer alan **GODMODE Discovery Engine** modülünün full gelişim yol haritasıdır.  
+Her aşama production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan maddeler işaretlenerek ilerleme takip edilir.
 
 ---
 
 # FAZ 1 — CORE DISCOVERY ENGINE (MVP → STABLE)
 
-**Durum:** ✅ TAMAMLANDI — v1.0.0-live  
-Bu faz ile GODMODE'un temel iskeleti oluşturuldu.  
-Artık sistem:
+GODMODE'un temel iskeletinin kurulduğu fazdır.
 
-- Discovery job yaratabiliyor  
-- Job’ları memory + SQLite hibrit modelde tutuyor  
-- Mock & Live (Google Places) modunda çalışabiliyor  
-- Manual run destekliyor  
-- İş geçmişi restart sonrası kaybolmuyor  
+Bu faz tamamlandığında:
 
----
+- Discovery işlerini başlatabilen
+- İş durumlarını yöneten
+- Mock ve gerçek veri arasında geçiş yapabilen
+- Manual-run destekleyen
+- Tek provider (Google Places) çalışan, **SQLite kalıcı job store’a sahip**
+- Sağlam validation + provider error handling katmanına sahip
 
-## **1.A — MODULE BOOTSTRAP (CORE)**
-Temel GODMODE modül yapısının oluşturulduğu aşama.
+tam bir MVP hazır olur.
 
-### Yapılanlar
-- [x] `modules/godmode` klasör yapısı kuruldu  
-- [x] API routing: `/api/godmode/*`  
-- [x] Controller yapısı oluşturuldu  
-- [x] Service iskeleti hazırlandı  
-- [x] Worker dosyaları oluşturuldu:
-  - `dataFeederWorker.js`
-  - `economicAnalyzerWorker.js`
-  - `entityResolverWorker.js`
-- [x] `GODMODE.md` ve `GODMODE_ROADMAP.md` oluşturuldu  
+**Faz 1 durumu:** ✅ TAMAMLANDI (v1.0.0-live)
 
 ---
 
-## **1.B — JOB MANAGEMENT SYSTEM (In-Memory v1)**
+## **1.A — CORE MODULE BOOTSTRAP**
 
-### Yapılanlar
-- [x] In-memory JOB STORE  
-- [x] Job CRUD endpointleri:
-  - GET `/jobs`
-  - GET `/jobs/:id`
-  - POST `/jobs/discovery-scan`
-- [x] UUID job id  
-- [x] Job durumları: `queued`, `running`, `completed`, `failed`  
-- [x] Job progress modeli:
-  - percent  
-  - found_leads  
-  - enriched_leads  
+Temel klasör, routing, servis ve controller yapıları.
 
----
+### Görevler:
 
-## **1.C — MOCK DISCOVERY ENGINE**
-Gerçek veri olmadan pipeline test edebilmek için.
-
-### Yapılanlar
-- [x] Mock discovery provider  
-- [x] Fake lead generation  
-- [x] Fake enrichment  
-- [x] Mock summary üretimi  
-- [x] `%100` completion logic  
-- [x] Manual run:  
-  - POST `/jobs/:id/run`
+- [x] `modules/godmode/` klasör ağacı kuruldu  
+- [x] API → `/api/godmode/*` routing sistemi tamamlandı  
+- [x] Controller → temel endpointler oluşturuldu  
+- [x] Service → temel job yönetimi iskeleti yazıldı  
+- [x] Workers → 3 temel worker dosyası oluşturuldu  
+  - `dataFeederWorker`
+  - `entityResolverWorker`
+  - `economicAnalyzerWorker`
+- [x] `GODMODE.md` ve `GODMODE_ROADMAP.md` oluşturuldu
 
 ---
 
-## **1.D — REAL DISCOVERY ENGINE (Google Places v1.0.0-live)**
+## **1.B — JOB MANAGEMENT SYSTEM (Memory Store v1)**
 
-### Yapılanlar
-- [x] Google Places TextSearch API entegrasyonu  
-- [x] Live vs Mock switch:  
-  - `GODMODE_DISCOVERY_MODE=0|1|mock|live`  
-- [x] Rate-limit uyumlu sayfalama  
-- [x] Kullanıcı rating filtresi (minGoogleRating)  
-- [x] maxResults uygulaması  
-- [x] Tüm raw sonuçlar normalize edildi  
-- [x] 20 örnek lead summary’e yazılıyor  
-- [x] İstanbul testleri (`50` ve `100`) tamamlandı  
+Discovery işlerini memory üzerinde tutan prototip job sistemi.
+
+### Görevler:
+
+- [x] In-memory JOB STORE yazıldı  
+- [x] `/jobs` → tüm işlerin listesi  
+- [x] `/jobs/:id` → tek işin detayları  
+- [x] `/jobs/discovery-scan` → yeni discovery job oluşturma  
+- [x] Job creation → UUID + criteria snapshot  
+- [x] Job status: `queued`, `running`, `completed`, `failed`  
+- [x] Job progress alanları:
+  - percent
+  - found_leads
+  - enriched_leads
 
 ---
 
-## **1.E — CONFIGURATION SYSTEM**
-Geliştirme & prod ortam yönetimi için.
+## **1.C — MOCK DISCOVERY ENGINE → ÇALIŞIR HALE GETİRME**
 
-### Yapılanlar
+Mock data ile çalışan discovery süreci.
+
+### Görevler:
+
+- [x] Mock provider oluşturuldu  
+- [x] Fake discovery sonuçları generate ediliyor  
+- [x] Fake enrichment hesaplaması yapılıyor  
+- [x] Job progress %100’e tamamlanıyor  
+- [x] Örnek lead listesi `result_summary` içerisine yazıldı  
+- [x] Manual run endpoint’i:
+  - `POST /api/godmode/jobs/:id/run`
+
+---
+
+## **1.D — REAL DISCOVERY (Google Places API v1)**
+
+Mock discovery → Gerçek Google Places API entegrasyonuna taşındı.
+
+### Görevler:
+
+- [x] Provider: `google_places` eklendi  
+- [x] `live` / `mock` switch sistemi eklendi  
+  - Env: `GODMODE_DISCOVERY_MODE=0|1` veya `mock|live|true`  
+- [x] Places Text Search → gerçek data alınıyor  
+- [x] Detay enrichment (rating, reviews, types, location vs.) için gerekli alanlar normalize edildi  
+- [x] Real sample leads → job summary içine yazıldı  
+- [x] Manual run gerçek data ile çalışıyor  
+  - `POST /api/godmode/jobs/:id/run` → gerçek Google Places çağrısı ile discovery  
+- [x] Test:
+  - [x] İstanbul için canlı discovery çalıştırıldı (`maxResults=50` ve `maxResults=100` gibi senaryolar)
+
+---
+
+## **1.E — CONFIGURATION SYSTEM (ENV + FLAGS)**
+
+Discovery engine’in hem geliştirme hem prod ortamında yönetilebilmesi.
+
+### Görevler:
+
+- [x] `GODMODE_DISCOVERY_MODE` (mock / live / 0 / 1 / true)
 - [x] `GOOGLE_PLACES_API_KEY`  
-- [x] `GODMODE_DISCOVERY_MODE`  
-- [x] `GODMODE_MAX_RESULTS`  
-- [x] Providers used → job summary içine yazılıyor  
+- [x] `GODMODE_MAX_RESULTS` upper bound mantığı `createDiscoveryJob` içine alındı (max 250)  
+- [x] “provider info” admin paneline eklenecek backend endpoint tasarımı  
+  - [x] `/api/godmode/jobs` çıktısında, `result_summary.stats.providers_used` ile hangi provider’ların kullanıldığı işaretleniyor.
 
 ---
 
-## **1.F — JOB PERSISTENCE SYSTEM (SQLite v1.0)**  
-**Durum:** ✅ TAMAMLANDI
+## **1.F — JOB PERSISTENCE SYSTEM (SQLite v1.0)**
 
-### DB Şeması
-- [x] `godmode_jobs`  
-- [x] `godmode_job_progress`  
-- [x] `godmode_job_results`  
+**DURUM: ✅ TAMAMLANDI — v1.0.0**
 
-### Repo
-- [x] insertJob  
-- [x] updateJob  
-- [x] loadAllJobs (JOIN’li hydrate)  
-- [x] saveJobResult  
-- [x] saveProgress  
+GODMODE, job’ları kalıcı olarak SQLite üzerinde saklıyor.  
+Backend restart olsa bile discovery job geçmişi ve sonuçları kaybolmuyor.
 
-### Service
-- [x] Memory + DB hibrit model  
-- [x] Boot sırasında yarım kalan işlerin auto-recovery  
-- [x] Summary yazma sistemi  
-- [x] Fail-safe error handling  
+### Yapılanlar:
 
-### Controller
-- [x] Tüm endpointler DB ile senkron  
-- [x] `JOB_NOT_FOUND` senaryosu test edildi  
+#### **DB Şeması (v1.0.0 canlı tasarım)**
 
-### Ekstra Eklenenler (Faz 1 sırasında)
-- [x] SQLite bootstrap hataları giderildi  
-- [x] Tabloların eksik olması durumunda otomatik schema creation  
-- [x] Faz 1 smoke testleri başarıyla tamamlandı  
+- [x] `godmode_jobs`
+  - id (TEXT, PRIMARY KEY — UUID)
+  - type (TEXT — örn: `discovery_scan`)
+  - label (TEXT)
+  - criteria_json (TEXT — request body snapshot)
+  - status (TEXT — `queued|running|completed|failed`)
+  - progress_percent (INTEGER)
+  - found_leads (INTEGER)
+  - enriched_leads (INTEGER)
+  - result_summary_json (TEXT — summary + stats + sample_leads + provider_errors)
+  - created_at (TEXT)
+  - updated_at (TEXT)
+
+> Not: Başta planlanan ayrı tablolar (`godmode_job_progress`, `godmode_job_results`) Faz 1 yerine ilerideki fazlara taşındı.  
+> Şu anda daha sade ve pratik olan **tek tablo modeli** kullanılıyor. İleride yüksek hacimli veri olduğunda bu iki tablo tekrar gündeme alınabilir.
+
+#### **Repo Layer**
+
+- [x] Job create → DB insert  
+  - `insertJob(job)` → `godmode_jobs` içinde kayıt oluşturur.  
+- [x] Job update → DB update  
+  - `updateJob(job)` → status, progress, result_summary gibi alanları günceller.  
+- [x] Job load → DB’den tüm jobları yükleyip memory’e hydrate eder  
+  - `loadAllJobs()` → `godmode_jobs` üzerinden full job state’i okur.
+
+#### **Service Layer**
+
+- [x] In-memory → DB store hibrit model  
+  - Memory cache, DB kayıtlarının üstünde hızlı lookup için kullanılıyor.  
+- [x] Yarım kalan jobları “failed” olarak işaretleme altyapısı  
+  - Boot sırasında status=`running` olan job’lar:
+    - `failed` olarak işaretleniyor
+    - `job.error = "Auto-recovery: previous run interrupted, job marked as failed."`
+- [x] Summary / result yazma mekanizması  
+  - Discovery tamamlandığında:
+    - progress → %100
+    - stats (found_leads, enriched_leads, providers_used) → `result_summary_json` içerisine yazılıyor.
+
+#### **Controller**
+
+- [x] Endpoint’ler DB ile tam entegre hale getirildi:
+  - [x] `GET /api/godmode/jobs`
+    - Tüm job’ları DB’den okuyup progress + summary ile birlikte döner.
+  - [x] `POST /api/godmode/jobs/discovery-scan`
+    - Yeni job yaratır, durumu `queued` olarak DB’ye kaydeder.
+  - [x] `POST /api/godmode/jobs/:id/run`
+    - Job’ı DB’den alır, yoksa:
+      - [x] `JOB_NOT_FOUND` hatasını döner.
+    - Varsa provider’ı (mock/live) çalıştırır, progress + result’ı DB’ye yazar.
+
+#### **Ekstra Eklenenler (Faz 1 içinde sonradan gelenler)**
+
+- [x] **Hata senaryosu testi:**  
+  - `POST /api/godmode/jobs/SAÇMA-ID/run` → `GODMODE_RUN_JOB_ERROR` + `"JOB_NOT_FOUND"` döndüğü doğrulandı.
+- [x] **Faz 1 smoke testleri:**  
+  - Farklı payload’larla (`maxResults=50`, `maxResults=100`, `maxResults=500`) İstanbul discovery çalıştırıldı ve job listesi üzerinden doğrulandı.
+- [x] **GODMODE bootstrap logları:**  
+  - DB tabloları henüz yokken alınan `no such table` hataları temizlendi; şu an bootstrap aşaması temiz log ile çalışıyor.
 
 ---
 
-## **1.G — CORE HARDENING & STABILITY EXTENSIONS (Mini-Geliştirmeler)**  
-Faz 1 tamamlandıktan sonra sistemi production seviyesine yaklaştırmak için eklenen sağlamlaştırma adımları.
+## **1.G — Job Validation & Provider Error Handling (v1.0.0)**
 
-### Yapılanlar
-- [x] **Job Validation Layer**
-  - [x] city / country zorunlu alan validasyonu  
-  - [x] categories → string array normalizasyonu  
-  - [x] minGoogleRating 0–5 arası clamp  
-  - [x] maxResults ≤ 250 hard-limit (üstü otomatik 250’ye çekiliyor)  
-  - [x] Payload format hataları için tutarlı error response modeli (`GODMODE_CREATE_JOB_ERROR`)  
+Bu adımın amacı:
 
-- [ ] **Provider Error Normalization**
-  - Google Places hatalarının normalize edilmesi  
-  - Tek tip provider error objesi: `{ provider, error_code, error_message }`  
-  - Job summary içine `provider_errors` ek alanı  
-  - Partial-success senaryoları için ayrıştırma  
+- Discovery job creation request’lerini sağlam bir validation katmanından geçirmek
+- Provider kaynaklı hataları normalize edip `result_summary` içine yazmak
+- Tüm provider’lar fail olduğunda bile hataları kaybetmeden job seviyesinde görmek
 
-- [ ] **Job Event Log System**
-  - Yeni tablo: `godmode_job_logs`  
-  - Her job için adım adım event kaydı  
-  - Örnek: queued → running → provider page fetch → completed  
-  - Debugging & monitoring için güçlü temel  
+### **1.G.1 — Job Validation Layer ✅**
 
-- [ ] **Worker Orchestration Stub Integration**
-  - Discovery tamamlandığında worker tetikleme altyapısı  
-  - dataFeederWorker → temel tetik oluşturuldu  
-  - Faz 2’de genişletilecek worker pipeline’a hazırlık  
+- [x] `createDiscoveryJob` içinde zorunlu alan validasyonları:
+  - [x] `city` + `country` zorunlu
+  - [x] `categories` alanı varsa array olmalı, değilse `VALIDATION_ERROR`
+  - [x] `minGoogleRating` 0–5 aralığında olmalı, aksi durumda `VALIDATION_ERROR`
+  - [x] `maxResults` > 0 olmalı, 250’den büyükse otomatik `250`’ye clamp
+- [x] Geçersiz input’larda:
+  - [x] `err.code = "VALIDATION_ERROR"`
+  - [x] Anlamlı Türkçe hata mesajları
+
+### **1.G.2 — Provider Error Normalization (Normal Case) ✅**
+
+- [x] `normalizeProviderError(provider, error)` helper’ı eklendi
+- [x] Başarılı discovery senaryosunda:
+  - [x] `result_summary.provider_errors = []`
+  - [x] `result_summary.stats.providers_used` alanı dolu (`["google_places"]`)
+  - [x] `result_summary.sample_leads` içinde normalize edilmiş lead objeleri
+- [x] Normal akış test edildi:
+  - `POST /api/godmode/jobs/discovery-scan`
+  - `POST /api/godmode/jobs/:id/run`
+  - Çıktıda:
+    - `progress.percent = 100`
+    - `sample_leads` dolu
+    - `provider_errors = []`
+
+### **1.G.3 — Provider Error Handling (Failure Scenarios) ✅**
+
+- [x] Her provider çağrısı `try/catch` ile sarıldı:
+  - Hata durumunda `normalizeProviderError('google_places', err)` ile tek tipe indirgeniyor
+  - Normalize hata objesi: `{ provider, error_code, error_message }`
+- [x] Bilinen pattern’ler:
+  - `HTTP_ERROR` (HTTP status kodu kaynaklı)
+  - `STATUS_*` (Google Places `status` değerleri)
+  - `MISSING_API_KEY`
+  - `NETWORK_ERROR` (`ECONNRESET`, `ETIMEDOUT` vs.)
+- [x] Tüm provider’lar fail olduğunda:
+  - [x] `ALL_PROVIDERS_FAILED` hatası fırlatılıyor (`err.code = "ALL_PROVIDERS_FAILED"`)
+  - [x] Job DB’de `status = "failed"` olarak işaretleniyor
+  - [x] Hata detayları `result_summary.provider_errors` içinde tutuluyor
+
+> Not: Bu flow, prod’da gerçek hata yaşandığında otomatik devreye girecek şekilde hazır.  
+> Gerekirse ileride özel bir failure test senaryosu için geçici olarak yanlış API key ile manuel test yapılabilir.
+
+### **1.G.4 — Provider Error Surfacing & Observability (v1.0.0) ✅**
+
+- [x] Tüm provider hataları job bazında `result_summary.provider_errors` içinde tutuluyor
+- [x] Job’ın `error` alanı, genel hata kodunu içeriyor (örn: `ALL_PROVIDERS_FAILED`)
+- [x] Gelecekteki dashboard / analytics fazları için veri modeli hazır:
+  - Hangi provider’ın ne sıklıkla hata verdiği
+  - Hangi error code’ların öne çıktığı
+- [x] Mock engine’de de `provider_errors: []` ile tutarlı response formatı sağlandı
+
+### **1.G.5 — Job Event Log System (Planlandı)**
+
+- [ ] Yeni tablo: `godmode_job_logs`
+- [ ] Her job için adım adım event kaydı
+- [ ] Örnek event akışı: `queued → running → provider_page_fetch → completed`
+- [ ] Debugging & monitoring için güçlü temel
+
+### **1.G.6 — Worker Orchestration Stub Integration (Planlandı)**
+
+- [ ] Discovery tamamlandığında worker tetikleme altyapısı
+- [ ] `dataFeederWorker` için temel tetik fonksiyonu
+- [ ] Faz 2’de genişletilecek worker pipeline’a hazırlık
 
 ---
 
 # FAZ 2 — OMNI-DATA FEEDER (MULTI PROVIDER DISCOVERY ENGINE)
 
-Bu faz ile GODMODE tek bir provider’dan (Google Places) çıkar ve gerçek bir **çok kaynaklı discovery motoruna** dönüşür.
-
----
+Bu faz ile GODMODE gerçek bir *multi-provider* veri avlama motoruna dönüşür.
 
 ## **2.A — PROVIDER ABSTRACTION LAYER (PAL)**
 
 - [ ] Unified provider interface  
-- [ ] Provider health check  
-- [ ] Rate limit yönetimi  
-- [ ] Provider fallback mekanizması  
+- [ ] Provider health check sistemi  
+- [ ] Rate limit balancing  
 
----
-
-## **2.B — 5+ DISCOVERY PROVIDER ENTEGRASYONU**
+## **2.B — 5+ Discovery Provider Integration**
 
 Providers:
-- [ ] Google Places (faz 2’de harden)  
-- [ ] LinkedIn Business Search  
-- [ ] Instagram Business Graph API  
-- [ ] Facebook Graph  
-- [ ] Foursquare / Yelp  
-- [ ] MERSİS / Ticaret Sicil  
 
----
+- [ ] Google Places (mevcut → faz 2’de finalize / harden)  
+- [ ] LinkedIn Company Finder  
+- [ ] Instagram Business Search  
+- [ ] Facebook Business  
+- [ ] Yelp / Foursquare  
+- [ ] Gov / Chamber of Commerce (MERSİS vb.)
 
-## **2.C — PARALLEL DISCOVERY ENGINE**
+## **2.C — Parallel Discovery Engine**
 
-- [ ] Paralel provider scanning  
-- [ ] Duplicate merging engine  
-- [ ] Confidence scoring  
-- [ ] Source-weighting sistemi  
+- [ ] Aynı anda 5 provider taraması  
+- [ ] Duplicate merging system  
+- [ ] Source confidence score  
 
----
-
-## **2.D — DEEP ENRICHMENT PIPELINE**
+## **2.D — Deep Enrichment**
 
 - [ ] Website scraping (cheerio)  
-- [ ] Wappalyzer Lite – teknoloji stack tespiti  
-- [ ] SEO sinyalleri  
-- [ ] Sosyal medya varlık analizi  
-- [ ] Meta / Google Ads tag detection  
+- [ ] Tech stack detection (Wappalyzer Lite)  
+- [ ] SEO signals  
+- [ ] Social presence  
+- [ ] Ad intelligence (Meta Ads / Google Ads tags)  
 
 ---
 
-# FAZ 3 — AI BRAIN INTEGRATION
+# FAZ 3 — BRAIN INTEGRATION (AI DECISION PIPELINE)
 
-Discovery sonuçlarını otomatik analiz eden bir yapay zeka katmanı.
-
----
+Discovery sonuçlarının otomatik analiz edilmesi.
 
 ## **3.A — AI Lead Ranking**
+
 - [ ] Lead AI Score v2  
 - [ ] Opportunity score  
-- [ ] Risk profile  
-- [ ] Industry-fit indeks  
-
----
+- [ ] Risk score  
+- [ ] Category positioning  
 
 ## **3.B — Auto-SWOT**
-- [ ] Lead özel SWOT  
+
+- [ ] Her lead için instant SWOT  
 - [ ] Pazar karşılaştırmalı SWOT  
-- [ ] Fırsat/tehdit haritaları  
+- [ ] Industry-fit değerlendirmesi  
+
+## **3.C — Auto-Sales Entry Strategy**
+
+- [ ] Entry channel önerisi  
+- [ ] Açılış cümlesi  
+- [ ] Hızlı kazanım önerileri  
+- [ ] Red flag’lere göre uyarılar  
 
 ---
 
-## **3.C — Auto-Sales Strategy**
-- [ ] Hedeflenen entry channel  
-- [ ] Açılış mesajı  
-- [ ] Red flags & risk uyarıları  
-- [ ] Sıcak lead için action plan  
-
----
-
-# FAZ 4 — FULL AUTOMATION & OUTREACH ECOSYSTEM
-
----
+# FAZ 4 — FULL AUTOMATION & OUTREACH ECOSYSTEM (ENTERPRISE MODE)
 
 ## **4.A — Autonomous Scanning**
-- [ ] Şehir/ülke bazlı otomatik tarama  
-- [ ] Trend-based scanning  
-- [ ] Predictive discovery  
 
----
+- [ ] Şehir / ülke bazlı otomatik discovery  
+- [ ] Sektör bazlı günlük taramalar  
+- [ ] Trend alert sistemi  
 
 ## **4.B — Auto-Enrichment Workers**
-- [ ] Worker cluster  
-- [ ] Çok aşamalı enrichment  
-- [ ] Retry & recovery  
 
----
+- [ ] Queue-based worker cluster  
+- [ ] Çok aşamalı enrichment pipeline  
+- [ ] Retry & error recovery mekanizması  
 
 ## **4.C — Outreach Auto-Trigger**
-- [ ] Lead AI Score > 80 → Outreach trigger  
-- [ ] Outreach Scheduler  
-- [ ] Auto-target grouping  
+
+- [ ] Lead threshold > 80 ise otomatik outreach  
+- [ ] Outreach Scheduler entegrasyonu  
+- [ ] AI tarafından seçilen hedef setleri  
 
 ---
 
-# FAZ 5 — ANALYTICS & INSIGHT HUB
+# FAZ 5 — ANALYTICS & INSIGHT HUB (GODMODE DASHBOARD)
 
 ## **5.A — Discovery Metrics**
-- [ ] Provider accuracy  
-- [ ] Trend heatmap  
-- [ ] Günlük/haftalık traffic  
+
+- [ ] Provider-based accuracy  
+- [ ] Lead volume heatmap  
+- [ ] Günlük/haftalık tarama trendleri  
 
 ## **5.B — Lead Intelligence Reports**
-- [ ] PDF pipeline  
-- [ ] Bölgesel raporlar  
-- [ ] Sektör fırsat analizleri  
+
+- [ ] Otomatik PDF raporları  
+- [ ] Sektörel raporlar  
+- [ ] Bölgesel fırsat haritaları  
 
 ---
 
 # NOTLAR
-- Roadmap her sprint sonunda güncellenir  
-- Fazlar birbirine bağımlı ilerler  
-- Yeni fazlar, ihtiyaç oldukça eklenir  
+
+- Bu roadmap her sprint sonunda güncellenecektir.  
+- Yeni fazlar eklenebilir.  
+- Öncelik her zaman Faz 1 → Faz 2 şeklinde ilerler.
