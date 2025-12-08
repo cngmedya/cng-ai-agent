@@ -43,6 +43,12 @@ function ensureJobLogTable() {
     )
   `,
   ).run();
+  db.prepare(
+    `
+    CREATE INDEX IF NOT EXISTS idx_job_logs_job_id
+    ON godmode_job_logs(job_id)
+  `,
+  ).run();
 }
 
 // Modül yüklendiğinde migration + log tablosunu garanti altına al
