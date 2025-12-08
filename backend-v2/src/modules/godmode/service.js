@@ -256,7 +256,7 @@ function normalizeProviderError(provider, error) {
     }
   } else if (message.includes('GOOGLE_PLACES_API_KEY tanımlı değil')) {
     errorCode = 'MISSING_API_KEY';
-  } else if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
+  } else if (error && (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT')) {
     errorCode = 'NETWORK_ERROR';
   }
 
@@ -451,7 +451,8 @@ async function runDiscoveryJobLive(job) {
     stats: {
       found_leads: foundLeads,
       enriched_leads: enrichedLeads,
-      providers_used: providersUsed.length > 0 ? providersUsed : ['google_places'],
+      providers_used:
+        providersUsed.length > 0 ? providersUsed : ['google_places'],
     },
     sample_leads: allLeads.slice(0, 20),
     provider_errors: providerErrors,
