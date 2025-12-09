@@ -149,6 +149,30 @@ function listJobs() {
   );
 }
 
+/** 
+ * Single job getter (API için)
+ * Önce memory cache'e, yoksa DB'ye bakar.
+ */
+function getJobById(id) {
+  if (!id) return null;
+
+  // 1) Memory cache
+  const fromCache = getJob(id);
+  if (fromCache) {
+    return fromCache;
+  }
+
+  // 2) DB
+  const fromDb = getJobFromDb(id);
+  if (fromDb) {
+    // Cache'e geri yazalım ki bir sonraki istek hızlı olsun
+    jobs.set(fromDb.id, fromDb);
+    return fromDb;
+  }
+
+  return null;
+}
+
 /**
  * VALIDATION HELPERLARI (Faz 1.G.1)
  */
@@ -630,11 +654,47 @@ async function runDiscoveryJob(jobId) {
       await runDiscoveryJobMock(job);
     }
 
+    //
+    // 🔴 BURASI YENİ: result_summary normalizasyon katmanı
+    //
+    if (job.result_summary && typeof job.result_summary === 'object') {
+      const rs = job.result_summary;
+
+      // Eğer stats yoksa, en azından basic bir stats objesi yarat
+      if (!rs.stats || typeof rs.stats !== 'object') {
+        rs.stats = {};
+      }
+
+      // providers_used
+      if (!Array.isArray(rs.providers_used)) {
+        // stats içindeki providers_used varsa oradan al, yoksa boş liste
+        rs.providers_used = Array.isArray(rs.stats.providers_used)
+          ? rs.stats.providers_used
+          : [];
+      }
+
+      // used_categories (şu an için yoksa boş liste bırakıyoruz;
+      // ileride pipeline/providers tarafında dolduracağız)
+      if (!Array.isArray(rs.used_categories)) {
+        rs.used_categories = Array.isArray(rs.stats.used_categories)
+          ? rs.stats.used_categories
+          : [];
+      }
+
+      // provider_errors
+      if (!Array.isArray(rs.provider_errors)) {
+        rs.provider_errors = [];
+      }
+
+      // stats.providers_used içinde de eşitle
+      if (!Array.isArray(rs.stats.providers_used)) {
+        rs.stats.providers_used = rs.providers_used;
+      }
+
+      job.result_summary = rs;
+    }
+
     markJobCompleted(job);
-
-    // Worker orchestration stub (Faz 1.G)
-    triggerPostDiscoveryWorkers(job);
-
     return getJob(jobId);
   } catch (err) {
     markJobFailed(job, err);
@@ -662,6 +722,7 @@ module.exports = {
   getStatus,
   listJobs,
   getJob,
+  getJobById, // <-- EKLENDİ
 
   // job creation / run (yeni isimler)
   createDiscoveryJob,
