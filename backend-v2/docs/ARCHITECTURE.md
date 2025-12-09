@@ -5,6 +5,245 @@ Tüm yeni geliştirmeler, refactor kararları ve modül eklemeleri bu yapı üze
 
 ---
 
+# Güncel Mimari
+
+backend-v2
+├── docs
+│   ├── API.md
+│   ├── ARCHITECTURE.md
+│   ├── devlogs
+│   │   ├── 2025-12-02-init.md
+│   │   ├── 2025-12-03-init.md
+│   │   ├── 2025-12-04-05-init.md
+│   │   ├── 2025-12-05-06-07-08-init.md
+│   │   ├── 2025-12-07-08-09-init.md
+│   │   └── BACKEND_V2_SNAPSHOT-2025-12-06.md
+│   └── MODULES.md
+├── migrate_add_ai_columns.js
+├── migrate_old_leads.js
+├── package-lock.json
+├── package.json
+└── src
+    ├── app.js
+    ├── core
+    │   ├── config.js
+    │   ├── db.js
+    │   ├── docs
+    │   │   └── CORE_DB.md
+    │   ├── http.js
+    │   ├── logger.js
+    │   ├── middleware
+    │   │   ├── authOptional.js
+    │   │   ├── authRequired.js
+    │   │   ├── errorHandler.js
+    │   │   ├── notFoundHandler.js
+    │   │   └── requestLogger.js
+    │   └── migrations
+    │       ├── 003_create_lead_search_intel.js
+    │       ├── 004_create_lead_intel_reports.js
+    │       └── 006_create_users.js
+    ├── data
+    │   ├── app.sqlite
+    │   └── crm.sqlite
+    ├── jobs
+    │   ├── migrate_add_cir_support.js
+    │   └── migrateOldLeads.js
+    ├── modules
+    │   ├── _template
+    │   │   ├── api
+    │   │   │   ├── controller.js
+    │   │   │   └── routes.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── TEMPLATE.md
+    │   │   ├── repo.js
+    │   │   └── service.js
+    │   ├── admin
+    │   │   ├── api
+    │   │   │   ├── controller.js
+    │   │   │   └── routes.js
+    │   │   ├── docs
+    │   │   │   ├── ADMIN.md
+    │   │   │   └── CHANGELOG.md
+    │   │   ├── repo
+    │   │   │   └── adminRepo.js
+    │   │   └── service
+    │   │       └── adminService.js
+    │   ├── auth
+    │   │   ├── api
+    │   │   │   ├── controller.js
+    │   │   │   └── routes.js
+    │   │   ├── docs
+    │   │   │   ├── AUTH.md
+    │   │   │   └── CHANGELOG.md
+    │   │   ├── repo.js
+    │   │   ├── service
+    │   │   │   └── authService.js
+    │   │   └── utils
+    │   │       ├── hash.js
+    │   │       └── jwt.js
+    │   ├── brain
+    │   │   ├── api
+    │   │   │   ├── controller.js
+    │   │   │   └── routes.js
+    │   │   ├── docs
+    │   │   │   ├── BRAIN.md
+    │   │   │   └── CHANGELOG.md
+    │   │   └── service
+    │   │       └── brainService.js
+    │   ├── crm
+    │   │   ├── api
+    │   │   │   ├── controller.js
+    │   │   │   └── routes.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── CRM.md
+    │   │   ├── index.js
+    │   │   ├── prompts
+    │   │   │   └── crm_brain_summary.md
+    │   │   └── service
+    │   │       └── crmBrainService.js
+    │   ├── discovery
+    │   │   ├── aiRanker.js
+    │   │   ├── controller.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── DISCOVERY.md
+    │   │   ├── placesClient.js
+    │   │   ├── repo.js
+    │   │   ├── routes.js
+    │   │   └── service.js
+    │   ├── email
+    │   │   ├── controller.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── EMAIL.md
+    │   │   ├── repo.js
+    │   │   ├── routes.js
+    │   │   └── service.js
+    │   ├── godmode
+    │   │   ├── api
+    │   │   │   ├── controller.js
+    │   │   │   └── routes.js
+    │   │   ├── docs
+    │   │   │   ├── GODMODE_ROADMAP.md
+    │   │   │   └── GODMODE.md
+    │   │   ├── pipeline
+    │   │   │   └── discoveryPipeline.js
+    │   │   ├── providers
+    │   │   │   ├── googlePlacesProvider.js
+    │   │   │   ├── index.js
+    │   │   │   └── providersRunner.js
+    │   │   ├── repo.js
+    │   │   ├── service.js
+    │   │   ├── validator.js
+    │   │   └── workers
+    │   │       ├── dataFeederWorker.js
+    │   │       ├── economicAnalyzerWorker.js
+    │   │       └── entityResolverWorker.js
+    │   ├── intel
+    │   │   ├── controller.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── INTEL.md
+    │   │   ├── repo.js
+    │   │   ├── routes.js
+    │   │   ├── seoOnpageService.js
+    │   │   └── service.js
+    │   ├── leadDashboard
+    │   │   ├── controller.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── LEAD_DASHBOARD.md
+    │   │   ├── repo.js
+    │   │   ├── routes.js
+    │   │   └── service.js
+    │   ├── outreach
+    │   │   ├── controller.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── OUTREACH.md
+    │   │   ├── first_contact_message.md
+    │   │   ├── repo.js
+    │   │   ├── routes.js
+    │   │   └── service.js
+    │   ├── outreachScheduler
+    │   │   ├── controller.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── OUTREACH_SCHEDULER.md
+    │   │   ├── repo.js
+    │   │   ├── routes.js
+    │   │   └── service.js
+    │   ├── research
+    │   │   ├── ai
+    │   │   │   └── research_master_prompt.md
+    │   │   ├── api
+    │   │   │   └── routes.js
+    │   │   ├── controller
+    │   │   │   └── controller.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── RESEARCH.md
+    │   │   ├── repo
+    │   │   │   └── researchRepo.js
+    │   │   ├── repo.js
+    │   │   └── service
+    │   │       ├── adsService.js
+    │   │       ├── benchmarkService.js
+    │   │       ├── competitorService.js
+    │   │       ├── competitorsService.js
+    │   │       ├── researchService.js
+    │   │       ├── socialsService.js
+    │   │       └── websearchService.js
+    │   ├── whatsapp
+    │   │   ├── controller.js
+    │   │   ├── docs
+    │   │   │   ├── CHANGELOG.md
+    │   │   │   └── WHATSAPP.md
+    │   │   ├── repo.js
+    │   │   ├── routes.js
+    │   │   └── service.js
+    │   └── xyz
+    ├── prompts
+    │   ├── intel
+    │   │   ├── controller.js
+    │   │   ├── lead_deep_website_analysis.md
+    │   │   ├── lead_intel_analysis.md
+    │   │   ├── routes.js
+    │   │   └── service.js
+    │   ├── lead
+    │   │   └── ai_rank_lead.md
+    │   ├── offers
+    │   ├── outreach
+    │   │   ├── first_contact_message.md
+    │   │   └── outreach_sequence_v2.md
+    │   ├── research
+    │   │   └── research_master_prompt.md
+    │   ├── seo
+    │   ├── social
+    │   └── universal
+    ├── server.js
+    ├── shared
+    │   ├── ai
+    │   │   ├── CHANGELOG.md
+    │   │   ├── LLM.md
+    │   │   ├── llmClient.js
+    │   │   └── promptLoader.js
+    │   ├── seo
+    │   │   └── onpageAnalyzer.js
+    │   ├── types
+    │   ├── utils
+    │   └── web
+    │       └── fetchWebsite.js
+    └── tests
+        ├── http
+        └── unit
+
+79 directories, 153 files
+
+---
+
 ## 1. Amaç ve End-to-End Akış
 
 Backend-v2, CNG Medya için **her sektörden potansiyel müşteri (lead) bulup, bunları analiz eden, zekâ üreten ve satış / iletişim süreçlerini destekleyen** çok modüllü bir ajans motorudur.
@@ -554,240 +793,3 @@ Bu dosya, backend-v2 için **güncel mimari harita** olarak kabul edilmelidir.
 Yeni modüller eklerken veya büyük refactor’lar yaparken, önce buradaki yapıya uyum kontrol edilir; gerekirse bu blueprint kontrollü şekilde güncellenir.
 
 
-# Güncel Mimari
-
-
-backend-v2
-├── docs
-│   ├── API.md
-│   ├── ARCHITECTURE.md
-│   ├── devlogs
-│   │   ├── 2025-12-02-init.md
-│   │   ├── 2025-12-03-init.md
-│   │   ├── 2025-12-04-05-init.md
-│   │   ├── 2025-12-05-06-07-08-init.md
-│   │   ├── 2025-12-07-08-09-init.md
-│   │   └── BACKEND_V2_SNAPSHOT-2025-12-06.md
-│   └── MODULES.md
-├── migrate_add_ai_columns.js
-├── migrate_old_leads.js
-├── package-lock.json
-├── package.json
-└── src
-    ├── app.js
-    ├── core
-    │   ├── config.js
-    │   ├── db.js
-    │   ├── docs
-    │   │   └── CORE_DB.md
-    │   ├── http.js
-    │   ├── logger.js
-    │   ├── middleware
-    │   │   ├── authOptional.js
-    │   │   ├── authRequired.js
-    │   │   ├── errorHandler.js
-    │   │   ├── notFoundHandler.js
-    │   │   └── requestLogger.js
-    │   └── migrations
-    │       ├── 003_create_lead_search_intel.js
-    │       ├── 004_create_lead_intel_reports.js
-    │       └── 006_create_users.js
-    ├── data
-    │   ├── app.sqlite
-    │   └── crm.sqlite
-    ├── jobs
-    │   ├── migrate_add_cir_support.js
-    │   └── migrateOldLeads.js
-    ├── modules
-    │   ├── _template
-    │   │   ├── api
-    │   │   │   ├── controller.js
-    │   │   │   └── routes.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── TEMPLATE.md
-    │   │   ├── repo.js
-    │   │   └── service.js
-    │   ├── admin
-    │   │   ├── api
-    │   │   │   ├── controller.js
-    │   │   │   └── routes.js
-    │   │   ├── docs
-    │   │   │   ├── ADMIN.md
-    │   │   │   └── CHANGELOG.md
-    │   │   ├── repo
-    │   │   │   └── adminRepo.js
-    │   │   └── service
-    │   │       └── adminService.js
-    │   ├── auth
-    │   │   ├── api
-    │   │   │   ├── controller.js
-    │   │   │   └── routes.js
-    │   │   ├── docs
-    │   │   │   ├── AUTH.md
-    │   │   │   └── CHANGELOG.md
-    │   │   ├── repo.js
-    │   │   ├── service
-    │   │   │   └── authService.js
-    │   │   └── utils
-    │   │       ├── hash.js
-    │   │       └── jwt.js
-    │   ├── brain
-    │   │   ├── api
-    │   │   │   ├── controller.js
-    │   │   │   └── routes.js
-    │   │   ├── docs
-    │   │   │   ├── BRAIN.md
-    │   │   │   └── CHANGELOG.md
-    │   │   └── service
-    │   │       └── brainService.js
-    │   ├── crm
-    │   │   ├── api
-    │   │   │   ├── controller.js
-    │   │   │   └── routes.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── CRM.md
-    │   │   ├── index.js
-    │   │   ├── prompts
-    │   │   │   └── crm_brain_summary.md
-    │   │   └── service
-    │   │       └── crmBrainService.js
-    │   ├── discovery
-    │   │   ├── aiRanker.js
-    │   │   ├── controller.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── DISCOVERY.md
-    │   │   ├── placesClient.js
-    │   │   ├── repo.js
-    │   │   ├── routes.js
-    │   │   └── service.js
-    │   ├── email
-    │   │   ├── controller.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── EMAIL.md
-    │   │   ├── repo.js
-    │   │   ├── routes.js
-    │   │   └── service.js
-    │   ├── godmode
-    │   │   ├── api
-    │   │   │   ├── controller.js
-    │   │   │   └── routes.js
-    │   │   ├── docs
-    │   │   │   ├── GODMODE_ROADMAP.md
-    │   │   │   └── GODMODE.md
-    │   │   ├── pipeline
-    │   │   │   └── discoveryPipeline.js
-    │   │   ├── providers
-    │   │   │   ├── googlePlacesProvider.js
-    │   │   │   ├── index.js
-    │   │   │   └── providersRunner.js
-    │   │   ├── repo.js
-    │   │   ├── service.js
-    │   │   ├── validator.js
-    │   │   └── workers
-    │   │       ├── dataFeederWorker.js
-    │   │       ├── economicAnalyzerWorker.js
-    │   │       └── entityResolverWorker.js
-    │   ├── intel
-    │   │   ├── controller.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── INTEL.md
-    │   │   ├── repo.js
-    │   │   ├── routes.js
-    │   │   ├── seoOnpageService.js
-    │   │   └── service.js
-    │   ├── leadDashboard
-    │   │   ├── controller.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── LEAD_DASHBOARD.md
-    │   │   ├── repo.js
-    │   │   ├── routes.js
-    │   │   └── service.js
-    │   ├── outreach
-    │   │   ├── controller.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── OUTREACH.md
-    │   │   ├── first_contact_message.md
-    │   │   ├── repo.js
-    │   │   ├── routes.js
-    │   │   └── service.js
-    │   ├── outreachScheduler
-    │   │   ├── controller.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── OUTREACH_SCHEDULER.md
-    │   │   ├── repo.js
-    │   │   ├── routes.js
-    │   │   └── service.js
-    │   ├── research
-    │   │   ├── ai
-    │   │   │   └── research_master_prompt.md
-    │   │   ├── api
-    │   │   │   └── routes.js
-    │   │   ├── controller
-    │   │   │   └── controller.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── RESEARCH.md
-    │   │   ├── repo
-    │   │   │   └── researchRepo.js
-    │   │   ├── repo.js
-    │   │   └── service
-    │   │       ├── adsService.js
-    │   │       ├── benchmarkService.js
-    │   │       ├── competitorService.js
-    │   │       ├── competitorsService.js
-    │   │       ├── researchService.js
-    │   │       ├── socialsService.js
-    │   │       └── websearchService.js
-    │   ├── whatsapp
-    │   │   ├── controller.js
-    │   │   ├── docs
-    │   │   │   ├── CHANGELOG.md
-    │   │   │   └── WHATSAPP.md
-    │   │   ├── repo.js
-    │   │   ├── routes.js
-    │   │   └── service.js
-    │   └── xyz
-    ├── prompts
-    │   ├── intel
-    │   │   ├── controller.js
-    │   │   ├── lead_deep_website_analysis.md
-    │   │   ├── lead_intel_analysis.md
-    │   │   ├── routes.js
-    │   │   └── service.js
-    │   ├── lead
-    │   │   └── ai_rank_lead.md
-    │   ├── offers
-    │   ├── outreach
-    │   │   ├── first_contact_message.md
-    │   │   └── outreach_sequence_v2.md
-    │   ├── research
-    │   │   └── research_master_prompt.md
-    │   ├── seo
-    │   ├── social
-    │   └── universal
-    ├── server.js
-    ├── shared
-    │   ├── ai
-    │   │   ├── CHANGELOG.md
-    │   │   ├── LLM.md
-    │   │   ├── llmClient.js
-    │   │   └── promptLoader.js
-    │   ├── seo
-    │   │   └── onpageAnalyzer.js
-    │   ├── types
-    │   ├── utils
-    │   └── web
-    │       └── fetchWebsite.js
-    └── tests
-        ├── http
-        └── unit
-
-79 directories, 153 files
