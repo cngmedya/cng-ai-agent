@@ -11,6 +11,8 @@ Backend-V2’nin çalışması, portlar, environment değişkenleri, API anahtar
 - Başlatma komutu:
 ```
 npm start
+
+"bsc" komutu githuba push commit yapar
 ```
 
 ### **Sunucu Framework**

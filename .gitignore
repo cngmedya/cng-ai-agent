@@ -24,4 +24,5 @@ backend/test-*.json*
 
 # Env
 .env
-.env.*
+.env.*backend/
+backend_v1_backup_*/
