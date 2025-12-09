@@ -1,81 +1,47 @@
 // backend-v2/src/modules/godmode/providers/providersRunner.js
 
-const {
-  getProvidersByChannels,
-  runProviderDiscover,
-} = require('./index');
+const { runGooglePlacesDiscovery } = require('./googlePlacesProvider');
 
-/**
- * GODMODE Discovery Providers Runner (Faz 2 PAL integration)
- *
- * Bu katman, verilen kriterlere göre doğru provider setini seçer
- * ve her birini çalıştırarak birleşik bir discovery sonucu döner.
- *
- * Dönüş formatı:
- * {
- *   leads: [...],                // tüm provider'lardan gelen birleşik lead listesi
- *   providers_used: [...],       // kullanılan provider id'leri (örn: ['google_places'])
- *   used_categories: [...],      // provider'ların efektif olarak kullandığı kategori listesi
- *   provider_errors: [           // provider bazlı hata listesi
- *     {
- *       provider_id: 'google_places',
- *       error: 'HTTP 403 ...'
- *     }
- *   ]
- * }
- */
 async function runDiscoveryProviders(criteria) {
+  const leads = [];
+  const providersUsed = [];
+  const usedCategories = [];
+
   const channels = Array.isArray(criteria?.channels)
     ? criteria.channels
-    : [];
+    : ['google_places'];
 
-  // Seçili channel'lara göre provider listesi
-  const providers = getProvidersByChannels(channels);
+  if (channels.includes('google_places')) {
+    const gp = await runGooglePlacesDiscovery(criteria);
+    providersUsed.push('google_places');
 
-  const allLeads = [];
-  const providersUsed = new Set();
-  const usedCategories = new Set();
-  const providerErrors = [];
+    // Provider kendi used_categories bilgisini veriyorsa onu topla
+    if (Array.isArray(gp.used_categories) && gp.used_categories.length > 0) {
+      usedCategories.push(...gp.used_categories);
+    }
 
-  // Not: Şimdilik sequential; Faz 2.C'de paralel execution (Promise.all) düşünülebilir
-  for (const provider of providers) {
-    try {
-      const result = await runProviderDiscover(provider, criteria);
-      if (!result) continue;
-
-      providersUsed.add(provider.id);
-
-      if (Array.isArray(result.used_categories)) {
-        for (const cat of result.used_categories) {
-          usedCategories.add(cat);
-        }
-      }
-
-      if (Array.isArray(result.leads)) {
-        allLeads.push(...result.leads);
-      }
-
-      if (Array.isArray(result.provider_errors) && result.provider_errors.length > 0) {
-        providerErrors.push(
-          ...result.provider_errors.map(err => ({
-            provider_id: provider.id,
-            ...err,
-          })),
-        );
-      }
-    } catch (err) {
-      providerErrors.push({
-        provider_id: provider.id,
-        error: String(err && err.message ? err.message : err),
-      });
+    if (Array.isArray(gp.leads)) {
+      leads.push(...gp.leads);
     }
   }
 
+  // === used_categories fallback mantığı ===
+  // Eğer provider seviyesinde hiç kategori toplanmadıysa,
+  // şimdilik doğrudan criteria.categories'i kullanıyoruz.
+  let effectiveUsedCategories = usedCategories;
+
+  if (
+    (!Array.isArray(effectiveUsedCategories) ||
+      effectiveUsedCategories.length === 0) &&
+    Array.isArray(criteria?.categories)
+  ) {
+    effectiveUsedCategories = [...criteria.categories];
+  }
+
   return {
-    leads: allLeads,
-    providers_used: Array.from(providersUsed),
-    used_categories: Array.from(usedCategories),
-    provider_errors: providerErrors,
+    leads,
+    providers_used: Array.from(new Set(providersUsed)),
+    used_categories: Array.from(new Set(effectiveUsedCategories || [])),
   };
 }
 

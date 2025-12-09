@@ -551,37 +551,43 @@ async function runGooglePlacesDiscovery(criteria, jobForLogging) {
 }
 
 /**
- * LIVE discovery engine wrapper
+ * LIVE discovery engine wrapper (Faz 2)
  */
 async function runDiscoveryJobLive(job) {
   const { criteria } = job;
 
-  // Multi-provider discovery runner (şu an sadece google_places aktif)
-  const discoveryResult = await runDiscoveryProviders(criteria, job);
+  // Faz 2: Tüm provider'ları tek yerden yöneten runner
+  const discoveryResult = await runDiscoveryProviders(criteria);
 
-  const leads = Array.isArray(discoveryResult.leads)
+  const allLeads = Array.isArray(discoveryResult.leads)
     ? discoveryResult.leads
     : [];
 
+  const foundLeads = allLeads.length;
+  const enrichedLeads = Math.round(foundLeads * 0.7);
+
+  // providers_used
   const providersUsed = Array.isArray(discoveryResult.providers_used)
     ? discoveryResult.providers_used
     : [];
 
-  const usedCategories = Array.isArray(discoveryResult.used_categories)
-    ? discoveryResult.used_categories
+  // criteria.categories fallback
+  const criteriaCategories = Array.isArray(criteria.categories)
+    ? criteria.categories
     : [];
+
+  // used_categories:
+  // 1) Eğer runner'dan gelen dolu bir dizi varsa onu kullan
+  // 2) Yoksa en azından criteria.categories'i yaz
+  const usedCategories =
+    Array.isArray(discoveryResult.used_categories) &&
+    discoveryResult.used_categories.length > 0
+      ? discoveryResult.used_categories
+      : criteriaCategories;
 
   const providerErrors = Array.isArray(discoveryResult.provider_errors)
     ? discoveryResult.provider_errors
     : [];
-
-  const uniqueProvidersUsed = Array.from(new Set(providersUsed.filter(Boolean)));
-  const uniqueUsedCategories = Array.from(
-    new Set(usedCategories.filter(Boolean)),
-  );
-
-  const foundLeads = leads.length;
-  const enrichedLeads = Math.round(foundLeads * 0.7);
 
   job.progress = {
     percent: 100,
@@ -589,39 +595,22 @@ async function runDiscoveryJobLive(job) {
     enriched_leads: enrichedLeads,
   };
 
-  const allProvidersFailed =
-    uniqueProvidersUsed.length > 0 &&
-    foundLeads === 0 &&
-    providerErrors.length > 0;
-
   job.result_summary = {
     engine_version: 'v1.1.0-live-faz2',
     notes:
-      'Multi-provider hazır discovery engine. Şu an sadece google_places aktif.\nFaz 2’de diğer providerlar eklenecek.',
+      'Multi-provider hazır discovery engine. Şu an sadece google_places aktif. Faz 2’de diğer providerlar eklenecek.',
     criteria_snapshot: criteria,
-
-    // Faz 2 için kritik alanlar (root)
-    providers_used: uniqueProvidersUsed,
-    used_categories: uniqueUsedCategories,
+    providers_used: providersUsed,
+    used_categories: usedCategories,
     provider_errors: providerErrors,
-
-    // Ek metrikler
     stats: {
       found_leads: foundLeads,
       enriched_leads: enrichedLeads,
-      providers_used: uniqueProvidersUsed,
-      used_categories: uniqueUsedCategories,
+      providers_used: providersUsed,
+      used_categories: usedCategories,
     },
-
-    // Örnek lead’ler
-    sample_leads: leads.slice(0, 50),
+    sample_leads: allLeads.slice(0, 20),
   };
-
-  if (allProvidersFailed) {
-    const err = new Error('Tüm provider çağrıları hata verdi.');
-    err.code = 'ALL_PROVIDERS_FAILED';
-    throw err;
-  }
 }
 
 /**
