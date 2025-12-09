@@ -203,5 +203,36 @@ Ben de bu README_FIRST.md dosyasını okuyarak:
 
 ---
 
-# ✔ Bu dosya sistemin başlangıç kılavuzudur.  
-Her geliştirme sonrası güncellenmelidir.
+## 📌 10. Smoke Test (smoke_test.sh)
+
+Sistem bütünlüğünü hızlıca test etmek için hazırlanmış tam otomatik bir script’tir.  
+Aşağıdaki alanlarda backend’in çalıştığını doğrular:
+
+- Admin status
+- Godmode discovery (job create + run + summary)
+- Email test log
+- WhatsApp test log
+- Outreach v1 first-contact
+- Outreach v2 sequence
+- Outreach Scheduler enqueue
+- Research CIR full-report
+
+### **Çalıştırma Komutu**
+```
+./scripts/smoke_test.sh
+```
+
+### **LEAD_ID Override**
+Bazı testler varsayılan olarak leadId=1 üzerinden çalışır.  
+Farklı lead denemek için:
+
+```
+LEAD_ID_OVERRIDE=123 ./scripts/smoke_test.sh
+```
+
+### **Script Konumu**
+```
+backend-v2/scripts/smoke_test.sh
+```
+
+- Do not modify any other part of the file.
