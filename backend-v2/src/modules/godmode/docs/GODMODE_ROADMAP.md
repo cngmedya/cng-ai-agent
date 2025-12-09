@@ -304,29 +304,108 @@ Amaç: Discovery tamamlandığında ilerideki worker pipeline’larına hook ata
 # FAZ 2 — OMNI-DATA FEEDER (MULTI PROVIDER DISCOVERY ENGINE)
 
 Bu faz ile GODMODE gerçek bir *multi-provider* veri avlama motoruna dönüşür.
+Şu an **v1.1.0-live-faz2** seviyesindeyiz: Google Places provider’ı tam normalize, multi-provider runner hazır, result_summary formatı genişletilmiş durumda.
 
 ## **2.A — PROVIDER ABSTRACTION LAYER (PAL)**
 
-- [ ] Unified provider interface  
-- [ ] Provider health check sistemi  
-- [ ] Rate limit balancing  
+Amaç: Tüm discovery provider’larını tek bir abstraction altında toplamak, ileride LinkedIn / Instagram / Yelp vb. kaynakları rahatça ekleyebilmek.
+
+### Durum:
+
+- [x] **Unified provider interface (v1.1.0)**
+  - `providersRunner.runDiscoveryProviders(criteria)` ile tek entry point
+  - Standart output:
+    - `leads` (normalize lead objeleri)
+    - `providers_used`
+    - `used_categories`
+    - `provider_errors`
+  - Şu an tek aktif kanal: `google_places`
+- [ ] **Provider health check sistemi**
+  - Her provider için basit health endpoint / lightweight check
+  - Admin panel / status endpoint’ine entegre edilecek
+- [ ] **Rate limit balancing**
+  - Provider bazlı rate limit ve backoff stratejisi
+  - Google Places + diğer provider’lar için ortak throttling katmanı
 
 ## **2.B — 5+ Discovery Provider Integration**
 
+Amaç: Farklı kanallardan veri çekerek tek bir omni-discovery motoru kurmak.
+
+### 2.B.1 — Google Places Provider Hardening & Normalization (v1.1.0) ✅
+
+- [x] `providers/googlePlacesProvider.js` normalize edildi
+  - Tek tip lead formatı:
+    - `provider`
+    - `place_id`
+    - `name`
+    - `address`
+    - `city`
+    - `country`
+    - `rating`
+    - `user_ratings_total`
+    - `types`
+    - `business_status`
+    - `location { lat, lng }`
+    - `raw.reference` (ileride deep-link vb. için)
+  - Tüm sonuçlar bu schema’ya zorlanıyor (eksik alanlar null / default)
+- [x] `providersRunner.runDiscoveryProviders` ile entegrasyon
+  - `channels` içinde `google_places` varsa otomatik devreye giriyor
+  - `providers_used` listesine `google_places` ekleniyor
+  - `used_categories` → Google Places tarafında fiilen kullanılan arama kategorileri
+- [x] `service.runDiscoveryJob*` entegrasyonu (FAZ 2 versiyonu)
+  - `engine_version: "v1.1.0-live-faz2"`
+  - `result_summary` alanları:
+    - `providers_used` → runner’dan gelen set
+    - `used_categories` → runner’dan gelen set (veya gerekirse criteria fallback)
+    - `provider_errors` → provider bazlı error listesi (şimdilik [] ama alan hazır)
+    - `stats.providers_used`
+    - `stats.used_categories`
+- [x] Smoke testler:
+  - İstanbul için `maxResults=10` / tek kategori / çoklu kategori senaryoları
+  - `GET /api/godmode/jobs/:id` → `result_summary` içinde yukarıdaki alanların doluluğu doğrulandı
+
+
+### 2.B.2+ — Diğer Providerlar (Plan)
+
 Providers:
 
-- [ ] Google Places (mevcut → faz 2’de finalize / harden)  
-- [ ] LinkedIn Company Finder  
-- [ ] Instagram Business Search  
-- [ ] Facebook Business  
-- [ ] Yelp / Foursquare  
+- [ ] LinkedIn Company Finder
+- [ ] Instagram Business Search
+- [ ] Facebook Business
+- [ ] Yelp / Foursquare
 - [ ] Gov / Chamber of Commerce (MERSİS vb.)
+- [ ] Ek: Google Maps Place Details (deep enrichment, FAZ 2.D ile birlikte)
+
+Her provider için hedef:
+
+- [ ] PAL interface’ine uygun adapter
+- [ ] Normalized lead output
+- [ ] Error / rate limit handling
+- [ ] `providers_used` ve `provider_errors` entegrasyonu
+
+### 2.B.6 — Discovery Deduplication & Freshness Policy (Design Draft)
+
+Amaç: Aynı firmayı anlamsızca tekrar tekrar keşfetmek yerine, “zaten sistemde olan” lead’ler için daha akıllı bir yol izlemek.
+
+- [ ] `potential_leads` tablosu üzerinden **unique key** (ör: `google_place_id`) ile dedup
+- [ ] Faz 2 hedef davranış:
+  - [ ] Yeni discovery → Eğer lead zaten varsa:
+    - [ ] `last_seen_at` / `last_discovered_at` güncelle
+    - [ ] “freshness window” içindeyse full yeniden enrichment yapma
+  - [ ] “force refresh” parametresi ile manuel yeniden analiz (ör: `forceRefresh: true`)
+- [ ] `result_summary` içine basit dedup metrics:
+  - [ ] `deduped_leads_count`
+  - [ ] `skipped_as_existing_count`
+- [ ] İleride FAZ 3’te Brain tarafına “lead yaşlanma / tazelik” sinyali olarak aktarılacak
+
+---
 
 ## **2.C — Parallel Discovery Engine**
 
-- [ ] Aynı anda 5 provider taraması  
-- [ ] Duplicate merging system  
-- [ ] Source confidence score  
+- [ ] Aynı anda çoklu provider taraması (parallel execution)
+- [ ] Duplicate merging system (multi-provider aynı firmayı tek lead’de birleştirme)
+- [ ] Source confidence score
+- [ ] Provider bazlı weighting
 
 ## **2.D — Deep Enrichment**
 
