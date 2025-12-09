@@ -9,7 +9,7 @@ Hedef: Yeni gelen bir geliştirici bu dosyayı okuduğunda, sadece “hangi mod�
 
 ---
 
-# Modüles Mimarisi
+# Modüller Mimarisi
 
 modules
 ├── _template
@@ -240,481 +240,1644 @@ Tüm modüller mümkün olduğunca aynı pattern’i takip eder:
 ---
 
 ## `admin` Modülü
+**Versiyon:** v1.0.0  
+**Konum:** `src/modules/admin`  
+**Durum:** Aktif – Sistem durum ve konfigürasyon yönetimi API’si  
+**Son Güncelleme:** 2025-12-06
 
-**Amaç:** Sistem yöneticileri için backend yönetim fonksiyonlarını sağlamak (dashboard verileri, sistem sağlığı, metrikler).  
-**Konum:** `src/modules/admin`
-
-### Yapı
-
-- `api/controller.js`
-  - Admin endpoint’leri (istatistikler, bazı yönetim aksiyonları vb.)
-- `api/routes.js` → `/api/admin/*`
-- `docs/ADMIN.md` → Admin modül tasarımı, endpoints, yetki modeli
-- `docs/CHANGELOG.md`
-- `repo/adminRepo.js` → Admin’e özel DB sorguları
-- `service/adminService.js` → Admin iş mantığı
+### Amaç
+Admin modülü, sistemin tüm operasyonel durumunu, modül sağlık bilgilerini, konfigürasyon ayarlarını ve genel backend özetini tek noktadan expose eden yönetim katmanıdır.
 
 ### Sorumluluklar
+- Sistem durumunu raporlama (uptime, node sürümü, bellek, host loadavg)
+- Backend uygulamasının versiyon ve çalışma ortamı bilgilerini sağlama
+- Tüm modüllerin sağlık ve versiyon durumu
+- Config & Feature flag’leri expose etme
+- Admin panel için merkezi overview datası sağlama
 
-- Yönetim paneline veri sağlayan API’ler:
-  - Toplam lead sayıları
-  - Son X günde eklenen lead’ler
-  - Discovery / GODMODE job istatistikleri (ileride)
-  - Outreach performans özetleri
-- Sistemin genel sağlık durumuna, istatistiklerine, metriklerine üst seviyeden erişim.
-- Yetki kontrolü ile sadece admin kullanıcılarının görebileceği dataları sağlar.
+### Teknik Yapı
+- `api/controller.js` — status, modules, config, overview endpoint’leri
+- `api/routes.js` — `/api/admin/*`
+- `service/adminService.js` — tüm veri toplama ve birleşik JSON hazırlama mantığı
+- `repo/adminRepo.js` — admin’e özel DB işlemleri
+- `docs/ADMIN.md` — tüm teknik tasarım ve örnek response’lar
+- `docs/CHANGELOG.md` — versiyon geçmişi
 
-### Örnek Kullanım Senaryosu
+### Endpointler
+- `GET /api/admin/status` — sistem & node & memory bilgisi
+- `GET /api/admin/modules` — modül sağlık & versiyon listesi
+- `GET /api/admin/config` — environment + feature flag bilgisi
+- `GET /api/admin/overview` — status + modules + db health birleşik JSON
 
-- Admin panel UI’si, tek bir “System Overview” sayfası için:
-  - `/api/admin/stats` endpoint’inden discovery + intel + outreach özetlerini çeker.
-  - Gelecekte:
-    - GODMODE job sayıları, son hata log’ları, worker sağlık durumu gibi metrikleri de buradan alabilir.
+### Veri Akışı
+1. Controller istek alır  
+2. `adminService` gerekli modüllerin repo ve servisleriyle konuşur  
+3. Sistem + modüller + db sağlık bilgisi toplanır  
+4. Tek unified JSON döndürülür  
+
+### Diğer Modüllerle İlişki
+- Discovery / GODMODE job istatistikleri ileride bu modüle bağlanacak
+- Outreach / email / whatsapp sonuçları üzerinden sistem performans metrikleri sunabilir
+- Auth entegrasyonu ile sadece admin rolü bu endpointleri görebilecek
+
+### Önemli Notlar
+- DB health check henüz gerçek değil (dummy)
+- Endpointler şu anda auth’suz; production’da JWT + role kontrolü zorunlu
+- Feature flags roadmap’e göre genişletilecek
 
 ---
 
 ## `auth` Modülü
+**Versiyon:** v1.0.0  
+**Konum:** `src/modules/auth`  
+**Durum:** ✔ Aktif ve stabil  
+**Son Güncelleme:** 2025-12-06
 
-**Amaç:** Kimlik doğrulama ve yetkilendirme katmanını yönetmek. Tüm modüllerin güvenlik kapısı.  
-**Konum:** `src/modules/auth`
-
-### Yapı
-
-- `api/controller.js` → Login, register, refresh token vb. endpoint’ler
-- `api/routes.js` → `/api/auth/*`
-- `docs/AUTH.md` → Auth akışı, token yapısı, güvenlik notları
-- `docs/CHANGELOG.md`
-- `repo.js` → Kullanıcı tablosu (users) ile ilgili DB işlemleri
-- `service/authService.js` → Auth iş mantığı
-- `utils/hash.js` → Şifre hashing / verify (örn. bcrypt)
-- `utils/jwt.js` → JWT üretimi / doğrulama yardımcıları
+### Amaç
+Auth modülü, tüm sistemin **kimlik doğrulama (authentication)** ve **yetkilendirme (authorization)** altyapısını yönetir.  
+Backend-v2’nin güvenlik kapısıdır ve diğer tüm modüllerin güvenli şekilde çalışabilmesi için temel oluşturur.
 
 ### Sorumluluklar
+- Email + şifre tabanlı kullanıcı oluşturma ve giriş sistemi
+- JWT access + refresh token üretimi, doğrulama, yenileme
+- Şifre hashing (bcrypt) ve güvenli karşılaştırma
+- Modüller arası güvenli erişim:
+  - Admin panelleri
+  - CRM işlemleri
+  - Outreach işlemleri
+  - LeadDashboard
+  - Research / Intel
+- Kullanıcı oturum yönetimi ve kimlik doğrulama middlewar’ları
 
-- Kullanıcı kayıt ve giriş işlemleri (email/password tabanlı auth).
-- Access / refresh token üretimi ve doğrulaması.
-- Şifre güvenliği (hash + salt).
-- Diğer modüllerin:
-  - **kimlik doğrulanmış kullanıcı**ya özel endpointler açabilmesi için temel oluşturmak.
+### Teknik Yapı
+- `api/controller.js`
+  - login
+  - register
+  - refresh-token
+  - logout (v2’de gelecek)
+- `api/routes.js`
+  - `/api/auth/*`
+- `docs/AUTH.md`
+  - Auth flow, örnek JWT payload’ları, güvenlik best practices
+- `repo.js`
+  - Users tablosu ile ilgili tüm DB işlemleri
+- `service/authService.js`
+  - Login / register / refresh mantığı
+  - Token üretimi
+  - Kullanıcı doğrulama
+- `utils/hash.js`
+  - bcrypt tabanlı hash + compare
+- `utils/jwt.js`
+  - Access ve refresh token üretimi
+  - verify & decode fonksiyonları
+
+### Endpointler
+- `POST /api/auth/register`
+  - Yeni kullanıcı kaydı
+- `POST /api/auth/login`
+  - Email + şifre ile giriş
+- `POST /api/auth/refresh`
+  - Refresh token ile yeni access token üretimi
+- `GET /api/auth/me` (Roadmap)
+  - Kullanıcının kendi profilini döner
+
+### Veri Modeli
+Users tablosu (migration 006_create_users.js’de)
+- id  
+- email  
+- password_hash  
+- role (admin/user gibi)  
+- created_at  
+- updated_at  
 
 ### Diğer Modüllerle İlişki
+- `core/middleware/authRequired.js` → tüm kritik endpointler için güvenlik katmanı
+- `admin` → admin rolü ile tam kontrol paneli
+- `crm`, `outreach`, `intel`, `research`, `leadDashboard` → kullanıcı bazlı veri işlemleri
+- `brain` → lead değerlendirmelerini kullanıcı ile ilişkilendirebilir
 
-- `core/middleware/authRequired.js` ve `authOptional.js` üzerinden, neredeyse tüm modüllerle entegredir.
-- Özellikle:
-  - `admin`, `crm`, `outreach`, `outreachScheduler`, `intel`, `research`, `leadDashboard` → genellikle auth zorunlu.
-- Multi-tenant / user-based data isolation gibi konular bu modülden başlar.
+### Önemli Notlar
+- Şu anda role-based access control (RBAC) **temel seviyede**
+- Roadmap:
+  - “role: admin / operator / agent” seviyesinde genişletilmiş RBAC
+  - Token metrikleri ve IP rate limit
+  - OAuth 2.0 entegrasyonu opsiyonel
+
+### Derin Senaryo Örneği
+**Senaryo: CRM ekranına erişim**
+
+1. Kullanıcı `/api/auth/login` üzerinden giriş yapar → access + refresh token alır  
+2. Frontend access token ile `/api/crm/lead/:id` endpoint’ine istek atar  
+3. `authRequired.js`:
+   - JWT kontrolü yapar  
+   - Token geçerliyse kullanıcı request context’e işlenir  
+4. CRM modülü kullanıcıya özel lead verilerini döner  
+5. Token süresi dolarsa frontend `refresh-token` ile yeni token alır  
+
+Auth modülü, sistemin tüm “kim, neye erişebilir?” sorusunun temelini oluşturur.
 
 ---
 
 ## `brain` Modülü
 
-**Amaç:** Sistemin farklı yerlerinden gelen sinyalleri (discovery, intel, crm, outreach) birleştirerek lead’ler için **üst seviye skor ve kararlar** üretmek.  
-**Konum:** `src/modules/brain`
+**Versiyon:** v1.0.0  
+**Konum:** `src/modules/brain`  
+**Durum:** Aktif – Lead skorlaması ve sinyal birleştirme motoru  
+**Son Güncelleme:** 2025-12-06
 
-### Yapı
+### Amaç
+Brain modülü, sistemdeki tüm modüllerden toplanan sinyallerin birleşerek **lead seviyesinde zekâ, skor ve stratejik değerlendirme ürettiği merkez beyin katmanıdır**.  
+GODMODE → Intel → Research → CRM → Outreach → LeadDashboard arasında köprü görevi görür.
 
+### Çekirdek Sorumluluklar
+- Lead için “AI Lead Brain Snapshot” oluşturmak.
+- Çoklu kaynaktan toplanan sinyalleri birleştirmek:
+  - Discovery / GODMODE sinyalleri (kaynak, provider, kategori)
+  - Intel (website & SEO analizleri)
+  - Research (rakip, pazar, sosyal medya, marka analizi)
+  - CRM (notlar, ilişki durumu, görüşme geçmişi)
+  - Outreach (email/whatsapp etkileşim sinyalleri)
+- Lead AI Score üretmek:
+  - 0–100 arası potansiyel skoru
+  - Fırsat/Risk seviyeleri
+  - Lead segmentasyonu
+- Lead için stratejik çıktı üretmek:
+  - “Bu lead neden önemli?”
+  - “Hangi sinyaller pozitif/negatif?”
+  - “Önerilen ilk temas yaklaşımı”
+
+### Teknik Yapı
 - `api/controller.js`
-- `api/routes.js` → `/api/brain/*`
-- `docs/BRAIN.md`
+  - `/api/brain/lead/:id`
+  - Lead bazlı brain snapshot endpoint’i
+- `api/routes.js`
+- `service/brainService.js`
+  - Tüm modüllerden veri toplayıp LLM’e gönderir
+  - Skor, segment, özet üretir
+  - Güncel snapshot’ı DB’ye kaydeder
+- `docs/BRAIN.md` → Modülün tam teknik tasarımı ve örnek payload’lar  
 - `docs/CHANGELOG.md`
-- `service/brainService.js` → Brain iş mantığı
 
-### Sorumluluklar
+### Kullanılan Veri Kaynakları
+- **GODMODE**
+  - lead discovery kaynağı
+  - provider listesi
+  - kategori & rating sinyalleri
+  - job sonuç özetleri
+- **Intel**
+  - Website/SEO kalitesi
+  - Marka mesajı analizi
+- **Research**
+  - Rakip analizi
+  - Sosyal medya analizi
+  - Reklam stratejisi
+  - Pazar konumlandırma
+- **CRM**
+  - Notlar
+  - Görüşme geçmişi
+  - CRM Brain Summary
+- **Outreach**
+  - Email gönderimleri
+  - WhatsApp mesajları
+  - Yanıt/okunma durumu
 
-- Lead bazlı “AI Brain” çıktıları:
-  - Lead AI Score (örneğin 0–100 arası potansiyel skoru).
-  - Fırsat / risk skorları.
-  - Segment / cluster atamaları.
-- Diğer modüllerden gelen veriyi birleştirme:
-  - GODMODE / discovery (lead kaynağı ve sayısı),
-  - Intel (website/SEO bilgileri),
-  - Research (sektör & rakip analizi),
-  - CRM (ilişki durumu, geçmiş görüşmeler),
-  - Outreach (yanıt oranı, ilgi düzeyi).
+### Brain Çıktı Formatı (Örnek)
+Brain modülünün ürettiği JSON genel olarak şu alanları içerir:
 
-### Örnek Akış
+```
+{
+  "lead_id": 123,
+  "score": 84,
+  "opportunity_level": "high",
+  "risk_level": "low",
+  "segment": "architecture A-tier",
+  "key_signals": {
+    "seo": "strong",
+    "socials": "active",
+    "reviews": "high-rated",
+    "website_quality": "professional"
+  },
+  "summary": "Firma güçlü dijital varlığa sahip...",
+  "recommended_strategy": "İlk temas profesyonel yaklaşım..."
+}
+```
 
-1. UI, belirli bir lead için “AI değerlendirme” ister.
-2. `brainService`, ilgili lead’in:
-   - Discovery kayıtlarını,
-   - Intel / Research sonuçlarını,
-   - CRM notlarını,
-   - Outreach geçmişini
-   toplar ve LLM / scoring fonksiyonuna gönderir.
-3. Çıkan skorlar DB’de tutulur (tablo detayları CORE_DB dokümanında) ve LeadDashboard üzerinden görüntülenir.
+### Derin Akış Senaryosu
+1. Lead seçilir → `/api/brain/lead/:id` çağrılır.
+2. `brainService` arka planda şu modüller ile konuşur:
+   - GODMODE → kaynak & provider sinyalleri
+   - Intel → website/SEO sonuçları
+   - Research → rakip/pazar analizleri
+   - CRM → notlar & özetler
+   - Outreach → iletişim geçmişi
+3. Toplanan sinyaller LLM’e gönderilir.
+4. LLM’den gelen skorlar + özet DB’ye kaydedilir.
+5. LeadDashboard bu snapshot’ı gösterir.
+
+### Diğer Modüllerle İlişki
+- **LeadDashboard** brain snapshot’larını gösteren UI katmanıdır.
+- **CRM** brain özetlerinden yararlanarak lead ilişkisini geliştirmeyi sağlar.
+- **Outreach** mesaj tonunu brain skoruna göre ayarlar.
+- **GODMODE** → Brain için temel ham veri kaynağıdır.
 
 ---
 
 ## `crm` Modülü
+**Versiyon:** v1.1.0  
+**Konum:** `src/modules/crm`  
+**Durum:** Aktif – Lead CRM beyni, not yönetimi, zaman çizelgesi, ilişki süreci yönetimi  
+**Son Güncelleme:** 2025-12-09
 
-**Amaç:** Lead’lerin CRM tarafındaki beyin ve zaman çizelgesi: notlar, özetler, ilişki durumu.  
-**Konum:** `src/modules/crm`
+### Amaç
+CRM modülü, bir lead’in tüm ilişki geçmişini, notlarını, LLM tarafından oluşturulan CRM Brain özetlerini, ilişki durumunu ve yaşam döngüsünü (lifecycle) yöneten kritik modüldür.  
+GODMODE → Intel → Research → Brain akışından sonra gelen **insan temasını** yöneten modüldür.
 
-### Yapı
-
-- `api/controller.js`
-- `api/routes.js` → `/api/crm/*`
-- `docs/CRM.md` + `docs/CHANGELOG.md`
-- `index.js` → CRM modül entrypoint’i
-- `prompts/crm_brain_summary.md` → CRM Brain özetini üreten LLM prompt’u
-- `service/crmBrainService.js` → CRM beyni oluşturma / güncelleme iş mantığı
-
-### Sorumluluklar
-
-- Lead odaklı CRM katmanı:
-  - Görüşme notları,
-  - Sonraki aksiyon planları,
-  - Lead ile ilişki durumu (yeni → sıcak → müşteri…).
-- LLM ile “CRM Brain Summary” üretmek:
-  - Bir lead hakkında dağınık notları tek bir anlamlı özet hâline getirmek.
-- Lead’in yaşam döngüsü içinde “ne oldu?” sorusuna cevap verecek özetleri saklamak.
-
-### Veri ve Tablolar
-
-- `lead_crm_brains` (isim CORE_DB’ye göre değişebilir):
-  - Lead bazlı CRM beyni / özeti.
-- `lead_crm_notes`:
-  - Tarihçeli notlar, görüşme kayıtları, hızlı etiketler.
-
-### Diğer Modüllerle İlişki
-
-- `leadDashboard` bu modülden gelen özet ve notları gösterir.
-- `outreach` ve `whatsapp/email` sonuçları, CRM notlarıyla ilişkilendirilebilir.
-- `brain` modülü skor üretirken CRM verisini bağlam olarak kullanır.
+### Çekirdek Sorumluluklar
+- Lead için tüm CRM notlarını yönetmek (timeline yönetimi).
+- LLM tabanlı CRM Brain Summary üretmek:
+  - Tüm notları anlamlı bir özet halinde birleştirmek.
+  - Lead’in ilişki geçmişini tek cümlede özetleyebilmek.
+- Lead ilişki durumlarını yönetmek:
+  - new → warm → hot → client → lost
+- Görüşme geçmişi & müşteri durumları işlemek.
+- Outreach / Email / WhatsApp çıktılarını CRM timeline'ına yansıtmak.
 
 ---
+
+### Teknik Yapı Bileşenleri
+
+#### 📌 API
+- `api/controller.js`
+  - Not ekleme / listeleme
+  - CRM Brain oluşturtma
+  - Lead CRM durum yönetimi
+- `api/routes.js` → `/api/crm/*`
+
+#### 📌 Service
+- `service/crmBrainService.js`
+  - Tüm CRM kayıtlarını toplayıp LLM'e göndererek CRM Brain üretir.
+  - Lead ID bazlı özet oluşturur ve DB’ye kaydeder.
+- Lead notları ve durum güncellemeleri için servis fonksiyonları.
+
+#### 📌 Repo
+- `repo.js` veya `repo/` altındaki fonksiyonlar:
+  - `lead_crm_notes`
+  - `lead_crm_brains`
+  - `lead_crm_status`
+  tabloları ile çalışır.
+
+#### 📌 Prompts
+- `prompts/crm_brain_summary.md`
+  - LLM’in CRM beyni oluşturması için ana prompt.
+
+#### 📌 Docs
+- `docs/CRM.md`
+  - Modülün tam tasarımı, endpointler ve örnek akışlar.
+
+---
+
+### Veri Modelleri
+
+#### 🗂 `lead_crm_notes`
+Lead ile ilgili tüm zaman çizelgesi kayıtlarını tutar:
+- note_id  
+- lead_id  
+- user_id  
+- note  
+- created_at  
+
+#### 🧠 `lead_crm_brains`
+LLM tarafından oluşturulmuş CRM özetlerini tutar:
+- id  
+- lead_id  
+- summary_text  
+- key_points_json  
+- created_at  
+
+#### 🔖 `lead_crm_status`
+Lead'in CRM durumlarını takip eder:
+- id  
+- lead_id  
+- status (new, warm, hot, client, lost)
+- updated_at
+
+---
+
+### Diğer Modüllerle Etkileşim
+
+| Modül | Etkileşim Tipi | Açıklama |
+|-------|----------------|----------|
+| **leadDashboard** | Veri sağlar | CRM notları + CRM beyni dashboard'da gösterilir. |
+| **outreach / email / whatsapp** | Data tüketir | Gönderilen mesajlar CRM timeline’a işlenebilir. |
+| **brain** | Bağlam sağlar | Brain oluşturulurken CRM özetleri + notlar bağlam olarak kullanılır. |
+| **godmode** | Lead kaynağı | GODMODE’dan gelen lead CRM modülüne giriş yapabilir. |
+
+---
+
+### Derin Kullanım Senaryosu
+
+#### Senaryo — Bir lead’in tüm geçmişinden otomatik CRM Brain üretimi
+
+1. Kullanıcı lead hakkında notlar ekler (görüşme, toplantı, problem, fırsat vb.).  
+2. Outreach modülü lead’e email/whatsapp gönderir → CRM notlarına otomatik işlenir.  
+3. Sistem `/api/crm/brain/:leadId` endpoint’ini tetikler.  
+4. `crmBrainService`:
+   - Tüm notları toplar  
+   - LLM’e gönderir  
+   - "CRM Brain Summary" döner  
+   - DB’ye kaydeder  
+5. `leadDashboard` bu özeti lead detay sayfasında gösterir.
+
+---
+
+### Önemli Notlar
+- CRM Brain özetleri şu anda manuel tetikleniyor; Faz 2’de otomatik tetikleyici eklenecek.
+- Notlar lead bazında tutulur, kullanıcı bazlı filtreleme ilerleyen fazlarda eklenecek.
+- CRM Brain bir “mini-stratejik özet” olduğu için lead’in pazarlama / satış yaklaşımını belirlemede kritik rol oynar.
+
+---
+
+### Roadmap (CRM)
+
+- [x] Not sistemi
+- [x] CRM Brain Summary v1
+- [x] Lead ilişki durum yönetimi
+- [ ] Otomatik CRM Brain oluşturma tetikleyicisi
+- [ ] Yazılımsal görüşme özetleri (AI Meeting Summary)
+- [ ] CRM → Outreach akıllı öneri entegrasyonu
 
 ## `discovery` Modülü
+**Versiyon:** v1.0.0  
+**Konum:** `src/modules/discovery`  
+**Durum:** Aktif – GODMODE’un temelini oluşturan klasik discovery motoru  
+**Son Güncelleme:** 2025-12-09
 
-**Amaç:** GODMODE’dan önceki “klasik” discovery akışını yönetmek; daha basit, tek-provider odaklı lead keşfi ve AI ranker.  
-**Konum:** `src/modules/discovery`
+### Amaç
+Discovery modülü, GODMODE’dan önceki “standalone / lightweight” keşif motorudur.  
+Tek provider (Google Places) ile çalışır ve daha basit kullanım senaryolarında hızlı lead keşfi sağlar.
 
-### Yapı
+### Çekirdek Sorumluluklar
+- Google Places tabanlı lead arama (şehir + kategori + rating filtreleri ile)
+- Ham sonuçları normalize ederek ortak discovery formatına dönüştürme
+- AI Ranker ile lead’lere skor atama (potansiyel değere göre sıralama)
+- Basit veya legacy projelerde GODMODE’a alternatif olarak kullanılma
+- Lead sonuçlarını discovery’ye özel repo üzerinden saklama (opsiyonel)
+- LeadDashboard gibi modüllere hızlı tüketilebilir discovery dataları sağlama
 
+### Teknik Yapı
+
+#### 📌 API
 - `controller.js`
-- `routes.js` → `/api/discovery/*`
-- `docs/DISCOVERY.md` + `docs/CHANGELOG.md`
-- `placesClient.js` → Google Places gibi dış kaynaklarla konuşan client
-- `repo.js` → Discovery sonuçlarının DB katmanı
-- `service.js` → Discovery iş mantığı
-- `aiRanker.js` → Discovery sonuçlarına AI bazlı skor verme
+  - `/api/discovery/search`
+  - `/api/discovery/rank`
+- `routes.js`  
+  → `/api/discovery/*`
 
-### Sorumluluklar
+#### 📌 Service
+- `service.js`
+  - Discovery arama işlemlerinin tamamı
+  - Google Places’ten gelen verinin normalize edilmesi
+  - AI Ranker entegrasyonu
 
-- Basit discovery istekleri:
-  - Tek parametre seti ile şehir / kategori bazlı lead bulma.
-- LLM veya rule-based bir `aiRanker` ile bulunan lead’leri puanlama.
-- Eski / legacy projelerde veya daha hafif kullanım senaryolarında kullanılmak üzere GODMODE’a alternatif sunmak.
+#### 📌 Repo
+- `repo.js`
+  - Discovery sonuçlarının DB’ye kaydedilmesi
+  - Lead sonuçlarının okunması
+  - Basit dedup mantığı (place_id/provider bazlı)
 
-### Diğer Modüllerle İlişki
+#### 📌 AI Ranker
+- `aiRanker.js`
+  - LLM veya rule-based scoring fonksiyonları
+  - Rating, yorum sayısı, kategori, konum gibi metriklerden skor üretir
 
-- `godmode` bu modülün “evolved / enterprise” versiyonu sayılabilir.
-- `leadDashboard` ve `intel` gibi modüller, discovery kaynaklı lead’leri de gösterebilir.
+#### 📌 Docs
+- `docs/DISCOVERY.md`
+  - Tam teknik açıklama, endpoint örnekleri, normalization yapısı  
+- `docs/CHANGELOG.md`
 
 ---
 
-## `email` Modülü
+### Normalizasyon Yapısı
 
-**Amaç:** Email gönderimi ve email tabanlı outreach akışlarını backend tarafında yönetmek.  
-**Konum:** `src/modules/email`
+Discovery modülü, Google Places ham datayı şu formatta normalize eder:
 
-### Yapı
+```
+{
+  provider: "google_places",
+  place_id: "...",
+  name: "...",
+  address: "...",
+  city: "...",
+  country: "...",
+  rating: 4.7,
+  user_ratings_total: 31,
+  types: [...],
+  business_status: "...",
+  location: { lat: ..., lng: ... },
+  raw: {...}
+}
+```
 
-- `controller.js`
-- `routes.js` → `/api/email/*`
-- `docs/EMAIL.md` + `docs/CHANGELOG.md`
-- `repo.js` → Email log’ları, template kullanımı vb.
-- `service.js` → Email gönderimi, template doldurma, kayıt altına alma
-
-### Sorumluluklar
-
-- SMTP veya üçüncü parti email sağlayıcıları (SendGrid, SES vb.) ile entegrasyon.
-- Outreach modülünden gelen email kampanyalarını fiilen göndermek.
-- Gönderim log’larını tutmak:
-  - Hangi lead’e, hangi template ile, ne zaman gönderildi,
-  - Geri dönüş/yanıt metadatası (mümkünse).
-
-### Örnek Akış
-
-1. `outreach` modülü, lead için ilk temas email içeriğini üretir.
-2. `email` modülü bu içeriği seçili sağlayıcıya iletir.
-3. Sonuç (başarılı / hata) repo katmanına yazılır.
-4. `leadDashboard` ve `crm` bu bilgiyi lead timeline’ında gösterir.
+Bu format GODMODE ile tamamen uyumludur.
 
 ---
+
+### Derinlemesine Akış Senaryosu
+
+**Senaryo: İstanbul'daki “mimarlık ofisi” kategorisini hızlıca tarama**
+
+1. UI veya internal script:  
+   `/api/discovery/search?city=İstanbul&category=mimarlık ofisi&minRating=4`
+2. `controller.js` → input doğrulaması
+3. `service.js` → `placesClient.searchPlaces()` çağrısı
+4. Sonuçlar normalize edilir
+5. `aiRanker.js` çalışır → Lead skorları hesaplanır
+6. Response UI’a döner; DB’ye yazmak opsiyoneldir
+
+**Bu modül GODMODE’un Faz 1'de %100 tamamladığı yapının daha basit sürümüdür.**
+
+---
+
+### Diğer Modüllerle Etkileşim
+
+| Modül | Etkileşim | Açıklama |
+|-------|-----------|---------|
+| **godmode** | Alternatif / temel motor | GODMODE → multi-provider, Discovery → tek-provider |
+| **leadDashboard** | Veri tüketir | Discovery sonuçları hızlı şekilde dashboard’da gösterilebilir |
+| **intel** | Bağlam sağlar | Discovery lead’leri intel analizine gönderilebilir |
+| **brain** | Sinyal üretir | Discovery skorları brain motoruna sinyal olarak gider |
+
+---
+
+### Roadmap (Discovery)
+- [x] Google Places tabanlı discovery
+- [x] Normalization (GODMODE ile %100 uyumlu)
+- [x] AI Ranker v1
+- [ ] Multi-query batching
+- [ ] Ek provider (Yelp/Foursquare) mini entegrasyon
+- [ ] Discovery → GODMODE otomatik geçiş köprüsü
+
+
+## `email` Modülü  
+**Versiyon:** v0.1.0  
+**Konum:** `src/modules/email`  
+**Durum:** Temel – SMTP entegrasyonu yok, sadece log sistemi  
+**Son Güncelleme:** 2025-12-06  
+
+### Amaç  
+Email modülü, CNG AI Agent’in ileride kullanacağı email gönderim altyapısının çekirdeğini oluşturur.  
+Bu sürümde **gerçek email gönderimi yapılmaz**, tüm işlemler simüle edilir ve SQLite’a log olarak yazılır.
+
+### Sorumluluklar  
+#### ✔ Email Loglama  
+Gönderilmek istenen email içerikleri `email_logs` tablosuna yazılır.  
+Alanlar:  
+- `to_email`  
+- `subject`  
+- `body`  
+- `meta` (JSON)  
+- `created_at`  
+
+#### ✔ Test Endpoint  
+Modülün çalışıp çalışmadığını doğrulamak için kullanılır.  
+SMTP ile bağlantı kurulmaz; yalnızca log üretilir.
+
+### Teknik Yapı  
+```
+src/modules/email
+  ├── api
+  │   ├── controller.js
+  │   └── routes.js
+  ├── repo.js
+  ├── service.js
+  └── docs
+      ├── EMAIL.md
+      └── CHANGELOG.md
+```
+
+- `controller.js` → `sendTestEmailHandler`  
+- `service.js` → `sendTestEmail()`  
+- `repo.js` → `logEmail()`  
+- `EMAIL.md` → Tam teknik doküman  
+
+### API Endpoints  
+| Method | Endpoint | Açıklama |  
+|--------|----------|----------|  
+| POST | `/api/email/test` | Test amaçlı email log oluşturur |
+
+**Response (örnek)**  
+```
+{
+  "ok": true,
+  "data": {
+    "ok": true,
+    "id": 1,
+    "note": "Email module v0.1.0 — SMTP entegrasyonu henüz eklenmedi, sadece log kaydı oluşturuldu."
+  }
+}
+```
+
+### Database — `email_logs`  
+Alanlar:  
+- `id` (PK)  
+- `to_email`  
+- `subject`  
+- `body`  
+- `meta`  
+- `created_at`  
+Tablo repo seviyesinde CREATE TABLE IF NOT EXISTS ile lazy initialize edilir.
+
+### Known Limitations  
+- SMTP yok  
+- Auth yok → endpoint public  
+- Queue / retry / delivery status yok  
+
+### Future Improvements  
+- SMTP / SendGrid / Mailgun / SES entegrasyonu  
+- Template bazlı HTML email sistemi  
+- Gönderim queue + scheduler  
+- Admin UI log görüntüleme  
+- Auth zorunluluğu  
 
 ## `godmode` Modülü
+**Versiyon:** v1.0.0-live  
+**Konum:** `src/modules/godmode`  
+**Durum:** Production-grade stable — Faz 1 %100 tamamlandı  
+**Son Güncelleme:** 2025-12-08  
 
-**Amaç:** Sistemin “GODMODE Discovery Engine” olarak adlandırılan, çok sağlayıcılı (multi-provider), yüksek zekâlı discovery motorunu yönetmek.  
-**Konum:** `src/modules/godmode`
+### Amaç
+GODMODE, CNG AI Agent ekosisteminin **omni-provider discovery engine**’idir.  
+Faz 1’de tek provider (Google Places) ile çalışan yüksek kapasiteli bir keşif motoru sunar.  
+Faz 2–3–4 ile çok sağlayıcılı, paralel çalışan, AI destekli bir “Discovery Brain”e dönüşecektir.
 
-### Yapı
-
-- `api/controller.js`
-  - `/api/godmode/status`
-  - `/api/godmode/jobs`
-  - `/api/godmode/jobs/:id`
-  - `/api/godmode/jobs/discovery-scan`
-  - `/api/godmode/jobs/:id/run`
-- `api/routes.js` → `/api/godmode/*`
-- `docs/GODMODE.md` → GODMODE modülünün genel mimarisi ve versiyon notları
-- `docs/GODMODE_ROADMAP.md` → Faz bazlı gelişim roadmap’i
-- `pipeline/discoveryPipeline.js` → Discovery pipeline orkestrasyonu
-- `providers/`
-  - `googlePlacesProvider.js` → Google Places provider’ı
-  - `index.js` → Provider registry ve export’lar
-  - `providersRunner.js` → Multi-provider runner / orchestration
-- `repo.js` → GODMODE ile ilgili tabloların repo katmanı:
-  - `godmode_jobs`
-  - `godmode_job_progress`
-  - `godmode_job_results`
-  - `godmode_job_logs`
-  - `potential_leads`
-- `service.js` → Job yönetimi, discovery engine, provider çağrıları, sonuç özetleri
-- `validator.js` → Discovery job input validasyonu (city, country, categories, rating, maxResults, channels vb.)
-- `workers/`
-  - `dataFeederWorker.js` → GODMODE çıktısını `potential_leads` tablosuna besleyen worker
-  - `economicAnalyzerWorker.js` → Ekonomik analiz için placeholder worker
-  - `entityResolverWorker.js` → Entity/lead birleştirme ve normalizasyon için placeholder worker
-
-### Sorumluluklar
-
-- **Job Management:**
-  - Discovery işlerini oluşturma, listeleme, detay görüntüleme.
-  - Job status: `queued`, `running`, `completed`, `failed`.
-  - Job progress alanları: yüzde, bulunan/enrich edilen lead sayıları.
-  - Job log sistemi (`godmode_job_logs`) ile adım adım event geçmişi (QUEUED, RUN_START, PROVIDER_PAGE, COMPLETED, FAILED).
-
-- **Multi-Provider Discovery Engine:**
-  - Faz 1: Google Places ile canlı discovery (şu an aktif).
-  - Faz 2: LinkedIn, Instagram, Facebook, Yelp/Foursquare, resmi kayıtlar (MERSİS vb.) gibi ek provider’lar için altyapı.
-
-- **Data Pipeline:**
-  - Provider’dan gelen ham veriyi normalize edip ortak lead formatına dönüştürmek.
-  - `potential_leads` tablosuna upsert ederek aynı lead’in tekrar tekrar eklenmesini engellemek (dedup).
-  - İleride CRM / Intel / Brain modüllerine beslenmek üzere sağlam bir lead havuzu oluşturmak.
-
-### Örnek Full Flow (Faz 1 + Faz 2 başlangıcı)
-
-1. `/api/godmode/jobs/discovery-scan` ile yeni job oluşturulur.
-2. Job DB’ye `queued` olarak yazılır, event log’a `QUEUED` eklenir.
-3. `/api/godmode/jobs/:id/run` çağrıldığında:
-   - Job `running` olur, log’a `RUN_START` yazılır.
-   - `providersRunner` devreye girer, şu an için `google_places` çağrılır.
-   - Her sayfa / batch için `PROVIDER_PAGE` event’leri loglanır.
-4. Provider sonuçları normalize edilir ve `potential_leads` tablosuna upsert edilir.
-5. Summary hazırlanır (`providers_used`, `used_categories`, stats) ve job `completed` olur, log’a `COMPLETED` yazılır.
+Modül, büyük ölçekli veri taramaları, job yönetimi, event-log tabanlı izleme ve normalize edilmiş lead üretimi için sistemin çekirdeğidir.
 
 ---
 
+### Öne Çıkan Özellikler (Faz 1 Final)
+- Google Places Text Search + Place Details entegrasyonu  
+- Twin-phase pipeline: **discovery → enrichment**
+- Persistent job store (SQLite kalıcılığı)  
+- Event log tabanlı zaman çizelgesi:
+  - `QUEUED`
+  - `RUN_START`
+  - `PROVIDER_PAGE`
+  - `COMPLETED`
+  - `FAILED`
+- Sağlam validasyon katmanı (`validator.js`)
+- Normalize provider error formatı:
+```
+{ "provider": "google_places", "error_code": "…", "error_message": "…" }
+```
+- Worker orchestration stub:
+  - `dataFeederWorker` aktif
+  - Faz 2–3: `entityResolverWorker`, `economicAnalyzerWorker`
+
+- Lead pipeline entegrasyonu:
+  - Normalize edilmiş veriler **potential_leads** tablosuna UPSERT edilir
+  - Duplicate koruması vardır
+
+---
+
+### Teknik Yapı
+- `api/controller.js` — Job oluşturma, listeleme, alma, çalıştırma
+- `api/routes.js` — `/api/godmode/*`
+- `docs/GODMODE.md` — Teknik doküman
+- `docs/GODMODE_ROADMAP.md` — Faz bazlı roadmap
+- `pipeline/discoveryPipeline.js` — Provider → Normalize → Summary orkestrasyonu
+- `providers/`
+  - `googlePlacesProvider.js`
+  - `providersRunner.js` → Provider orchestration
+  - `index.js` → Provider registry
+- `repo.js`
+  - `godmode_jobs`
+  - `godmode_job_results`
+  - `godmode_job_logs`
+  - `godmode_job_progress`
+  - `potential_leads`
+- `service.js` — Job state machine + iş mantığı
+- `validator.js` — Input doğrulama
+- `workers/`
+  - `dataFeederWorker.js`
+  - `economicAnalyzerWorker.js`
+  - `entityResolverWorker.js`
+
+---
+
+### Çekirdek Sorumluluklar
+#### ✔ Job Management (Persistent)
+- Job state machine:
+  - `queued → running → completed` veya `failed`
+- Job log sistemi (zaman çizelgesi)
+- Job progress:
+  - `percent`, `found_leads`, `enriched_leads`
+- Summary üretimi:
+  - `providers_used`
+  - `used_categories`
+  - `provider_errors`
+  - `stats`
+
+#### ✔ Multi‑Provider Discovery Engine (Faz 2 için hazır)
+- Provider abstraction layer tamamlandı
+- `providersRunner` paralel çalışmaya hazır
+- Hata yönetimi normalize edildi
+- Faz 2’de eklenecek provider’lar:
+  - LinkedIn
+  - Instagram
+  - Facebook
+  - Yelp / Foursquare
+  - MERSİS (resmi kayıtlar)
+
+#### ✔ Lead Pipeline Integration
+- Normalize lead formatı:
+```
+{
+  provider,
+  place_id,
+  name,
+  address,
+  city,
+  country,
+  rating,
+  user_ratings_total,
+  types,
+  business_status,
+  location: { lat, lng },
+  raw: {...}
+}
+```
+- UPSERT → potential_leads  
+- Duplicate merging altyapısı Faz 2’de gelecek
+
+---
+
+### API Endpoints
+- `GET /api/godmode/status`
+- `POST /api/godmode/jobs/discovery-scan`
+- `POST /api/godmode/jobs/:id/run`
+- `GET /api/godmode/jobs`
+- `GET /api/godmode/jobs/:id`
+
+---
+
+### Job Yaşam Döngüsü (Özet)
+1. **Job oluşturma**
+   - Validasyon
+   - `godmode_jobs` insert
+   - Log → `QUEUED`
+
+2. **Çalıştırma**
+   - Status → `running`
+   - Log → `RUN_START`
+
+3. **Provider Pipeline**
+   - Her batch → `PROVIDER_PAGE`
+   - Normalize lead
+   - UPSERT → potential_leads
+
+4. **Tamamlama**
+   - Summary builder
+   - Status → `completed`
+   - Log → `COMPLETED`
+   - Worker tetikleme
+
+5. **Hata**
+   - Status → `failed`
+   - Log → `FAILED`
+
+---
+
+### Environment Variables
+- `GOOGLE_PLACES_API_KEY`
+- `GODMODE_DISCOVERY_MODE` (`mock`, `live`)
+- `GODMODE_MAX_RESULTS`
+
+---
+
+### Faz 2 Hazırlık Durumu
+Faz 1 altyapısı, Faz 2 için tamamen hazır:
+- Provider abstraction layer
+- Parallel runner mimarisi
+- Error normalization
+- Worker hook sistemi
+- Lead pipeline stabilization
+- Tamamlanmış state machine
+
+Faz 2 hedefleri:
+- 5+ provider
+- Confidence scoring
+- Duplicate merging engine
+- Provider health check
+- Parallel batching
+
+---
+
+### Sonuç
+GODMODE Faz 1 ile:
+- Discovery motoru %100 stabil
+- Üretim seviyesinde kullanılabilir
+- Büyük ölçekli taramalar için hazır
+
+Faz 2’de GODMODE, çok sağlayıcılı bir **Omni‑Data Discovery AI Engine** haline getirilecektir.
+
 ## `intel` Modülü
+**Versiyon:** v1.3.0  
+**Konum:** `src/modules/intel`  
+**Durum:** Aktif – Çok katmanlı lead intelligence ve website analizi motoru  
+**Son Güncelleme:** 2025-12-06
 
-**Amaç:** Lead’ler için derinlemesine “intelligence” (özellikle web sitesi ve SEO sinyalleri) üretmek.  
-**Konum:** `src/modules/intel`
+### Amaç
+Intel modülü, bir firmanın **web sitesi + dijital varlığı** üzerinden toplanan sinyalleri, AI destekli bir şekilde işleyip:
+- hızlı "ilk bakış" intel,
+- detaylı website / marka analizi,
+- teknik on‑page SEO sinyalleri
+üreten **lead intelligence beyni**dir.
 
-### Yapı
+GODMODE / discovery tarafından bulunan lead’lerin, pazarlama ve satış açısından **ne kadar güçlü / hazır / profesyonel** olduklarını anlamak için kullanılır.
 
-- `controller.js`
-- `routes.js` → `/api/intel/*`
-- `docs/INTEL.md` + `docs/CHANGELOG.md`
-- `repo.js` → Lead intel tablolarına erişim
-- `service.js` → Intel iş mantığı
-- `seoOnpageService.js` → On-page SEO analizi ( `shared/seo/onpageAnalyzer.js` ile entegre )
+### Katmanlı Yapı (3 Seviye Intel)
+INTEL.md’de tanımlandığı gibi modül üç ana seviyede çalışır:
 
-### Sorumluluklar
+1. **Basic Intel — Lead Search Intel Snapshot (v1.0)**  
+   Hızlı tarama çıktısı; tek endpoint ile hızlı okunabilir özet üretir:
+   - Kategori tespiti ve temel segment (ör. mimarlık ofisi, güzellik merkezi, ajans, vb.)
+   - Web varlığı durumu (site var mı, aktif mi, çok eski mi?)
+   - Dijital olgunluk seviyesi (zayıf / orta / güçlü)
+   - Basit SWOT sinyalleri (güçlü yanlar, zayıflıklar, fırsatlar, tehditler)
+   - Mesajlaşma–tasarım uyumu (kurumsal mı, karışık mı?)
+   - Önerilen ilk temas açısı (fiyat odaklı mı, strateji odaklı mı, tasarım odaklı mı?)
+   
+   Bu seviye çıktıları **lead_search_intel** tablosuna “snapshot” olarak kaydedilir.
 
-- Bir lead’in web sitesi üzerinden:
-  - On-page SEO analizi (title, meta, H etiketleri, içerik yoğunluğu vb.)
-  - İçerik, marka mesajı, iş alanı gibi sinyallerin çıkarılması.
-- İleride:
-  - Backlink, Domain Authority gibi metrikler,
-  - Sosyal medya bağlantıları,
-  - Blog / içerik stratejisi gibi detaylar da bu modüle eklenebilir.
+2. **Deep Website Intel — Lead Intelligence Report v1 (v1.1)**  
+   Firma web sitesini ve dijital varlığını **sayfa sayfa** inceleyen derin analiz katmanı:
+   - Ana sayfa, hizmet sayfaları, referanslar, blog vb. üzerinden full content taraması
+   - Bilgi mimarisi (information architecture) değerlendirmesi
+   - CTA yapısı (net mi, dağınık mı?)
+   - Branding & görsel kalite değerlendirmesi
+   - Güven sinyalleri (referans, sosyal kanıt, sertifikalar)
+   - Riskler ve kaçırılan fırsatlar
+   - Uzun formlu, AI üretimli **Lead Intelligence Report** metni
+   
+   Çıktılar **lead_intel_reports** benzeri rapor tablosuna yazılır (CORE_DB ile uyumlu).
+
+3. **SEO Technical Intel — Onpage SEO v1 (v1.3.0)**  
+   `seoOnpageService.js` ve `shared/seo/onpageAnalyzer.js` ile entegre çalışan teknik analiz katmanı:
+   - Title / meta description / H1–H2 yapısı
+   - URL yapısı ve slug kalitesi
+   - İçerik yoğunluğu ve anahtar kelime sinyalleri
+   - Temel teknik on‑page kontroller (indexlenebilirlik sinyalleri, temel yapısal hatalar)
+   
+   Bu katman, Basic/Deep Intel akışlarında otomatik olarak tetiklenebilir ve intel snapshot’larına gömülü olarak gelir.
+
+---
+
+### Teknik Yapı
+- `controller.js`  
+  - HTTP isteklerini alır, validasyon sonrası ilgili servis fonksiyonlarına yönlendirir.
+- `routes.js`  
+  - `/api/intel/*` endpoint’lerini tanımlar.
+- `service.js`  
+  - Basic Intel, Deep Website Intel ve SEO Technical Intel akışlarını koordine eder.
+  - Web fetch, HTML parse, LLM çağrısı ve DB yazma adımlarını orkestre eder.
+- `seoOnpageService.js`  
+  - `shared/web/fetchWebsite.js` ve `shared/seo/onpageAnalyzer.js` ile birlikte teknik SEO analizini yapar.
+- `repo.js`  
+  - `lead_search_intel` ve `lead_intel_reports` tabloları ile çalışan veri erişim katmanıdır.
+- `docs/INTEL.md`  
+  - Tüm bu akışların detaylı tasarımını, örnek request/response’ları ve LLM prompt yapısını içerir.
+
+---
+
+### Endpointler (INTEL.md ile uyumlu)
+
+- `POST /api/intel/analyze`
+  - **Basic Intel + Onpage SEO baseline** üretir.
+  - Beklenen payload (özet):
+    - `url` (zorunlu)
+    - `leadId` (opsiyonel – lead ile ilişkilendirme)
+    - `context` / `notes` (opsiyonel iş bağlamı)
+  - Çıktı:
+    - Basic intel snapshot (kategori, olgunluk, kısa SWOT, önerilen yaklaşım)
+    - Temel on‑page SEO sinyalleri
+    - `lead_search_intel` kaydı (varsa güncelleme / yoksa insert)
+
+- `POST /api/intel/deep-analyze`
+  - **Deep Website Intel + AI Intelligence Report** üretir.
+  - Daha ağır ve uzun süren bir işlemdir; tam website içeriği ve marka mesajı analiz edilir.
+  - Çıktı:
+    - Ayrıntılı lead intelligence raporu (uzun metin)
+    - Öne çıkan güçlü/zayıf alanlar
+    - Önerilen aksiyon listesi
+    - İlgili rapor tablosuna kayıt (lead bazlı ilişkilendirme)
+
+Gelecekte INTEL.md’de tanımlı ek endpointler (örneğin sadece SEO check, sadece classification vb.) aktif edildiğinde bu liste genişletilecektir.
+
+---
 
 ### Diğer Modüllerle İlişki
 
-- `research` modülünden gelen daha geniş pazar/veri analizleri ile birlikte yorumlanabilir.
-- `brain` lead seviyesinde SEO / site kalitesi skoru sağlar.
-- `leadDashboard` lead detay sayfasında “website / SEO intel” sekmesini bu modülden besler.
+| Modül | Etkileşim Tipi | Açıklama |
+|-------|----------------|----------|
+| **godmode / discovery** | Veri kaynağı | Bulunan lead’lerin domain/URL bilgisi intel analizine giriş olarak kullanılır. |
+| **brain** | Sinyal sağlayıcı | Brain skorlaması için "website quality", "seo_strength", "brand_maturity" gibi sinyaller sağlar. |
+| **research** | Tamamlayıcı | Araştırma modülünün daha geniş pazar/rakip analizleri ile birlikte yorumlanır. |
+| **leadDashboard** | Görselleştirme | Lead detay ekranında intel snapshot’ları ve rapor özetlerini gösterir. |
+| **crm** | Bağlam | CRM notları ve süreç bilgisi, intel raporları yorumlanırken LLM’e bağlam olarak verilebilir. |
 
 ---
+
+### Derin Akış Senaryosu (Örnek)
+
+**Senaryo – Yeni keşfedilen mimarlık ofisi için hızlı intel + rapor hazırlama**
+
+1. GODMODE, İstanbul’daki bir mimarlık ofisini `potential_leads` tablosuna ekler ve lead’e ait web sitesi URL’sini kaydeder.
+2. Kullanıcı veya otomatik job, `/api/intel/analyze` endpoint’ini `url` + `leadId` ile çağırır.
+3. `intel/service.js`:
+   - Siteyi indirir (`fetchWebsite`),
+   - HTML’i parse eder,
+   - On‑page SEO analizini çalıştırır,
+   - LLM’e gönderilecek özet bağlamı hazırlar,
+   - Basic Intel snapshot’ı ve kısa SWOT + öneri üretir,
+   - Sonuçları `lead_search_intel` tablosuna yazar.
+4. Lead satış açısından önemli görünüyorsa, `/api/intel/deep-analyze` ile derin analiz tetiklenir.
+5. Deep rapor çıktısı:
+   - `lead_intel_reports` tablosuna kaydedilir,
+   - `brain` ve `leadDashboard` tarafından kullanılır.
+
+Bu sayede CNG ekibi, bir firmayı aramadan önce o firma hakkında **gerçekten derin ve AI destekli bir resme** sahip olur.
 
 ## `leadDashboard` Modülü
 
-**Amaç:** Lead merkezli dashboard / özet görünümünü besleyen backend katmanı.  
-**Konum:** `src/modules/leadDashboard`
+**Versiyon:** v1.2.0  
+**Konum:** `src/modules/leadDashboard`  
+**Durum:** Aktif – tek endpoint üzerinden AI destekli, multi‑kaynak lead özetleri üretir  
+**Son Güncelleme:** 2025-12-06  
 
-### Yapı
+### Amaç
 
-- `controller.js`
-- `routes.js` → `/api/lead-dashboard/*` (veya benzeri prefix)
-- `docs/LEAD_DASHBOARD.md` + `docs/CHANGELOG.md`
-- `repo.js` → Dashboard sorgularını yapan DB katmanı
-- `service.js` → UI’ın ihtiyacı olan birleştirilmiş lead datalarını hazırlayan iş mantığı
+`leadDashboard` modülü, CNG AI Agent içindeki tüm zekâ katmanlarını (GODMODE, Intel, Research/CIR, CRM Brain, Outreach) **tek bir JSON** içinde birleştiren **read‑model / orchestrator** katmanıdır.
+
+Amaç:
+
+- Frontend’in **tek API çağrısı** ile bir lead hakkında “her şeyi” görebilmesini sağlamak,
+- Brain/LLM için **bağlam dostu (brain‑friendly)** bir JSON üretmek,
+- Tüm alt modüllerin (discovery/godmode, intel, research, crm, outreach) verilerini **standart bir şemada** toplamak,
+- Sadece “read” yapan, yazma işini diğer modüllere bırakan, **stabil ve cache’lenebilir bir sorgu katmanı** olmak.
+
+Detaylı tasarım ve örnekler için: `src/modules/leadDashboard/docs/LEAD_DASHBOARD.md`.
+
+---
 
 ### Sorumluluklar
 
-- Tek bir endpoint seti üzerinden, lead için:
-  - Discovery / GODMODE kaynak bilgileri,
-  - Intel (website/SEO) çıktıları,
-  - Research sonuçları,
-  - CRM notları ve beyin özetleri,
-  - Outreach / Email / WhatsApp geçmişini
-  bir araya getirmek.
-- “Read model” gibi davranır:
-  - Yazma/güncelleme genellikle diğer modüller üzerinden yapılır,
-  - LeadDashboard bu verileri sadece **okur** ve UI’a uygun formatta döner.
+`LEAD_DASHBOARD.md`’de tanımlandığı haliyle çekirdek sorumluluklar:
 
-### Örnek Akış
+1. **Tek Endpointten Lead Özeti**
+   - Bir lead hakkında:
+     - Kaynak / segment bilgisi,
+     - Intel + Research/CIR özetleri,
+     - CRM Brain ve ilişki durumu,
+     - Outreach geçmişi / AI önerileri
+     tek JSON içinde döner.
+   - “Üst seviye lead görünümü” için ana kaynak API’dir.
 
-1. UI, lead detay sayfası açmak istediğinde `/api/lead-dashboard/:leadId` gibi bir endpoint çağırır.
-2. `leadDashboardService` arka planda:
-   - GODMODE / discovery kaynak tablosunu,
-   - Intel / Research sonuçlarını,
-   - CRM beyni ve notlarını,
-   - Outreach, Email, WhatsApp log’larını
-   okuyup tek bir JSON içinde birleştirir.
-3. Böylece frontend, tek request ile komple lead evrenine sahip olur.
+2. **Multi‑Kaynak Orkestrasyon**
+   - Aşağıdaki modüllerden veri toplar:
+     - **GODMODE / Discovery**  
+       - Lead kaynak bilgisi, provider, kategori, rating vb.
+     - **Intel**  
+       - `lead_search_intel` + `lead_intel_reports` üzerinden:
+         - website / SEO kalitesi,
+         - dijital olgunluk,
+         - teknik on‑page SEO sinyalleri.
+     - **Research / CIR (CNG Intelligence Report)**  
+       - `research` modülünden:
+         - son CIR JSON’u (`cir_json`),
+         - `priority_score`, `sales_notes`,
+         - `social_presence`, `ad_intel`, `web_presence`, `benchmark` özetleri.
+     - **CRM Brain**  
+       - `crm` modülünden:
+         - lead CRM beyni (`lead_brain_summary`),
+         - `ai_score_band`, `risk_level`, `opportunities`, `next_actions` vb.
+     - **Outreach**  
+       - `outreach` + `email` + `whatsapp` modüllerinden:
+         - son giden mesajlar,
+         - open / reply metrikleri (uygulandığı ölçüde),
+         - AI tabanlı ilk temas / sekans önerileri.
+   - Tüm bu kaynaklardan gelen veriyi **tek, tutarlı bir şema** altında birleştirir.
+
+3. **Read‑Model / Aggregation Katmanı**
+   - Kendi başına yeni tablo yazmaz; ana sorumluluğu:
+     - Diğer modüllerin tablolarından okuma yapmak,
+     - Bu verileri frontend ve AI için anlamlı hâle getirmek.
+   - Böylece:
+     - DB şeması bozulmadan yeni görünüm / alan eklemek kolaylaşır,
+     - Dashboard API’si UI ihtiyaçlarına göre evrimleşebilir.
+
+4. **Brain‑Friendly JSON Üretimi**
+   - Çıktı formatı LLM/Brain tarafından beslenmeye uygun olacak şekilde tasarlanmıştır:
+     - Net bölümler,
+     - Her bölümde “özet + detay” kombinasyonu,
+     - Gereksiz gürültüden arındırılmış, ama bağlam açısından zengin alanlar.
 
 ---
+
+### Teknik Yapı
+
+- `controller.js`
+  - HTTP isteklerini alır, parametreleri parse eder ve service katmanına yönlendirir.
+- `routes.js`
+  - `LEAD_DASHBOARD.md` ile uyumlu olarak şu endpoint’leri tanımlar:
+    - `GET /api/leads`  
+      - Basit lead listeleme (id, isim, domain, şehir, segment vb.)
+    - `GET /api/leads/:leadId/ai-dashboard`  
+      - Tek bir lead için AI dashboard JSON’u döner.
+- `service.js`
+  - Lead bazlı dashboard verisini oluşturur:
+    - GODMODE/discovery repo fonksiyonları üzerinden lead kaynağını çeker,
+    - Intel ve Research/CIR sonuçlarını toplar,
+    - CRM beyni ve not özetlerini bağlar,
+    - Outreach geçmişinden özet metrikler üretir,
+    - Tümünü tek response objesi olarak birleştirir.
+- `repo.js`
+  - LeadDashboard’a özel okuma sorgularını içerir:
+    - Lead + kaynak bilgisi,
+    - İlgili intel / research / crm / outreach kayıtlarının join’lenmesi.
+  - Yazma işlemleri yine ilgili modüllerin repo’ları üzerinden yapılır.
+
+- `docs/LEAD_DASHBOARD.md`
+  - Tam teknik tasarım,
+  - Örnek response şemaları,
+  - UI tarafının beklediği alanlar,
+  - Brain/LLM kullanım senaryoları.
+
+---
+
+### Response Şeması (Özet)
+
+`LEAD_DASHBOARD.md`’de tanımlanan AI dashboard response’u üst seviyede şu bölümlerden oluşur:
+
+- `lead`  
+  - Kimlik ve temel bilgiler:
+    - `id`, `name`, `domain`, `segment`, `city`, `country`
+    - `source_tags` (ör. `["godmode", "google_places", "mimarlık ofisi"]`)
+    - rating / review özetleri (varsa)
+- `intel`  
+  - Website / SEO / dijital olgunluk özetleri:
+    - `seo_score`, `website_quality`, `brand_maturity`
+    - ana riskler ve fırsatlar
+- `research`  
+  - CIR’den gelen özet alanlar:
+    - `priority_score`
+    - kısa SWOT / fırsat / tehdit sinyalleri
+    - sosyal / reklam / web varlığına dair highlight’lar
+- `brain`  
+  - Brain modülünden:
+    - `ai_score`, `ai_score_band`
+    - `opportunity_level`, `risk_level`
+    - `lead_brain_summary` (headline, why_now, red_flags, next_actions vb.)
+- `crm`  
+  - CRM modülünden:
+    - son not özetleri,
+    - ilişki durumu (`status`: new/warm/hot/client/lost),
+    - CRM Brain kısa özeti (varsa).
+- `outreach`  
+  - Email / WhatsApp / diğer kanallardan gelen:
+    - son gönderim özetleri,
+    - varsa cevap / open bilgileri,
+    - planlanmış sekans bilgileri (ileriki fazlar için).
+- `meta`  
+  - Dashboard versiyonu,
+  - Kullanılan veri kaynakları listesi,
+  - Üretilme zamanı gibi teknik metaveriler.
+
+Bu şema sayesinde frontend, tek bir endpoint ile hem UI hem de AI kullanım senaryoları için yeterli bağlama sahip olur.
+
+---
+
+### Diğer Modüllerle İlişki
+
+| Modül            | Rolü                                | Açıklama                                                                 |
+|------------------|-------------------------------------|--------------------------------------------------------------------------|
+| `godmode`        | Lead kaynağı                        | Job ve provider bazlı discovery sonuçlarını lead seviyesinde özetler.    |
+| `discovery`      | Alternatif/simple discovery kaynağı | Legacy/standalone discovery çıktıları varsa bunları da okuyabilir.       |
+| `intel`          | Website/SEO zekâ kaynağı            | Basic ve Deep Intel çıktıları, dashboard’ın intel bölümünü besler.       |
+| `research` (CIR) | Derin pazar / rakip zekâsı          | CIR JSON + puanlar, dashboard’ın stratejik analiz kısmını oluşturur.     |
+| `brain`          | AI lead beyni                       | Lead AI skoru ve stratejik özetler, dashboard’un “beyin” katmanını kurar.|
+| `crm`            | İlişki geçmişi / CRM Brain          | Notlar, süreç, CRM Brain özetleri dashboard’un ilişki kısmını besler.    |
+| `outreach`       | Mesaj & kampanya geçmişi            | İlk temas mesajları, sekanslar ve cevaplar outreach alanına yansır.      |
+| `email`/`whatsapp` | Kanal seviyesinde log             | Gönderim log’ları outreach/CRM/leadDashboard kombinasyonunda görünür.    |
+| `admin`          | Health ve raporlama                 | İleride dashboard performans metrikleri admin üzerinden izlenebilir.     |
+
+---
+
+### Kullanım Senaryosu (Özet)
+
+**Senaryo – Satış ekibinin bir lead’e bakarken “her şeyi tek ekranda görmesi”**
+
+1. UI, lead detay sayfasını açarken `GET /api/leads/:leadId/ai-dashboard` çağrısını yapar.
+2. `leadDashboard.controller` isteği alır, `leadDashboardService` fonksiyonunu tetikler.
+3. Service:
+   - GODMODE/discovery üzerinden lead kaynağını ve temel meta veriyi çeker,
+   - Intel + Research/CIR sonuçlarını toparlar,
+   - Brain, CRM ve Outreach modüllerinden gerekli özetleri alır,
+   - Bunları yukarıda anlatılan `lead/intel/research/brain/crm/outreach/meta` şemasında birleştirir.
+4. UI bu JSON’u:
+   - Kartlar,
+   - Sekmeler,
+   - Timeline ve KPI bileşenleri halinde görselleştirir.
+5. Aynı JSON, gerekirse Brain veya başka AI katmanları için de doğrudan kullanılabilir.
+
+LeadDashboard böylece, CNG AI Agent ekosisteminde **“tek bakışta her şey”** deneyimini sağlayan kritik okuma modülü hâline gelir.
 
 ## `outreach` Modülü
+**Versiyon:** v2.1.0  
+**Konum:** `src/modules/outreach`  
+**Durum:** Stable — Production Ready  
+**Son Güncelleme:** 2025-12-06
 
-**Amaç:** Lead’lere yapılacak ilk temas (first contact) ve devam eden iletişim için **strateji ve içerik** üretmek.  
-**Konum:** `src/modules/outreach`
+### Amaç
+Outreach modülü, CNG Medya’nın satış pipeline’ındaki ilk iletişim ve takip süreçlerini otomatikleştiren iletişim motorudur.
 
-### Yapı
-
-- `controller.js`
-- `routes.js` → `/api/outreach/*`
-- `docs/OUTREACH.md` + `docs/CHANGELOG.md`
-- `first_contact_message.md` → İlk temas mesajı için prompt / metin şablonu
-- `repo.js` → Outreach kayıtları, kampanya / mesaj log’ları
-- `service.js` → Outreach kampanyası iş mantığı
+Görevleri:
+- WhatsApp / Email / Instagram DM için **ilk temas mesajı (v1)** oluşturmak
+- Lead + Intel verilerini işleyerek **çok adımlı outreach sequence (v2)** üretmek
+- Tonlama / dil / kanal uyumunu sağlayarak premium ve sektöre uygun iletişim tasarlamak
 
 ### Sorumluluklar
+#### ✔ v1 — İlk Temas Motoru
+- Tek seferlik ilk mesaj üretimi
+- Kanal: whatsapp / email / instagram_dm
+- Ton: premium / kurumsal / samimi
+- Dil: tr / en
+- Prompt: `first_contact_message.md`
 
-- Farklı kanallar (email, WhatsApp, sosyal medya) için uygun ilk mesaj taslaklarını üretmek.
-- Mesajların tonu ve içeriğini:
-  - Brain skorları,
-  - CRM durumu,
-  - Research ve Intel çıktıları
-  ile uyumlu hale getirmek.
-- Kampanya mantığı:
-  - Belirli bir lead seti için A/B test mesajları,
-  - Farklı segmentler için farklı pitch’ler.
+#### ✔ v2 — Multi-Step Sequence Motoru
+- Lead ID bazlı, çok adımlı AI outreach sekansı üretir
+- Kullanılan parametreler:
+  - channel
+  - tone
+  - language
+  - objective
+  - max_followups
+- INTEL modülünden gelen SWOT + digital_status + priority_score entegre edilir
+- Prompt: `outreach_sequence_v2.md` (Universal Voice Edition)
 
-### Diğer Modüllerle İlişki
+### Teknik Yapı
+modules/outreach/
+- `controller.js`
+- `service.js`
+- `repo.js`
+- `first_contact_message.md`
+- `outreach_sequence_v2.md`
+- `docs/OUTREACH.md`
+- `docs/CHANGELOG.md`
 
-- `outreachScheduler` zamanlama/otomasyon tarafını yönetirken, içerik ve strateji `outreach`’ten gelir.
-- `email` ve `whatsapp` modülleri teknik gönderimi yapar.
-- `crm` ve `leadDashboard`, outreach sonuçlarını lead timeline’ında gösterir.
+### API Endpoints
+| Method | Endpoint | Version | Açıklama |
+|--------|----------|---------|----------|
+| POST | `/api/outreach/first-contact` | v1.x | Tek seferlik ilk temas mesajı üretir |
+| POST | `/api/outreach/sequence/:leadId` | v2.x | Çok adımlı AI outreach sekansı üretir |
+
+### Veri Akışı
+#### v1 — First Contact Flow
+Client → Controller → Service.generateFirstContact() → promptLoader → llmClient → JSON output
+
+#### v2 — Multi-Step Sequence Flow
+Client → Controller → Service.generateSequenceForLead() → repo.getLeadById() → intel.analyzeLead() → promptLoader → llmClient → ai_context + sequence[]
+
+### AI Prompts
+- **first_contact_message.md** — kısa premium v1 mesaj motoru
+- **outreach_sequence_v2.md** — Universal Voice Edition, strict JSON, çok adımlı sekans motoru
+
+### Output Format
+**ai_context:**
+```
+{
+  "ai_score_band": "A",
+  "priority_score": 75,
+  "why_now": "string",
+  "risk_level": "medium",
+  "ideal_entry_channel": "whatsapp"
+}
+```
+**sequence[]:**
+```
+{
+  "step": 1,
+  "type": "initial",
+  "send_after_hours": 0,
+  "subject": null,
+  "message": "string"
+}
+```
+
+### Dependencies
+- shared/ai/llmClient.js
+- shared/ai/promptLoader.js
+- modules/intel/service.js → analyzeLead()
+- core/db.js
+
+### Future Improvements
+- Sector Packs (industry-specific bundles)
+- Follow-up scheduling (jobs/)
+- WhatsApp Cloud API entegrasyonu
+- UI dashboard sequence embed
+- Sequence archive sistemi
+
+### Versioning
+Detaylar: `CHANGELOG.md`
+
+## `outreachScheduler` Modülü  
+**Versiyon:** v0.1.0  
+**Konum:** `src/modules/outreachScheduler`  
+**Durum:** Temel — Sequence üretiyor fakat gerçek zamanlama/cron/queue henüz yok  
+**Son Güncelleme:** 2025-12-06  
+
+### Amaç  
+Outreach Scheduler modülü, CNG AI Agent’in **“Yapay Satış Otomasyonu”** için temel zamanlama ve sekans yönetim katmanıdır.  
+Şu anki sürümde gerçek zamanlama/cron sistemi bulunmaz; ana görevi outreach modülünde üretilen AI sekanslarını sarmalamak ve gelecekte queue sistemi için altyapı oluşturmaktır.
 
 ---
 
-## `outreachScheduler` Modülü
+### Sorumluluklar  
 
-**Amaç:** Outreach aksiyonlarının **zamanlanmasını ve otomatikleştirilmesini** yönetmek.  
-**Konum:** `src/modules/outreachScheduler`
+#### ✔ 1. Sequence Generation Wrapper  
+Outreach modülündeki `generateOutreachSequenceForLead` fonksiyonunu çağırarak lead bazlı AI sekansı üretir.  
+Parametreler:  
+- `leadId`  
+- `channel` (whatsapp / email)  
+- `tone` (premium / kurumsal / samimi…)  
+- `language` (tr / en)  
+- `objective` (örn: ilk_temas)  
+- `max_followups` (örn: 2)
 
-### Yapı
-
-- `controller.js`
-- `routes.js` → `/api/outreach-scheduler/*`
-- `docs/OUTREACH_SCHEDULER.md` + `docs/CHANGELOG.md`
-- `repo.js` → Zamanlanmış görevler, queue kayıtları
-- `service.js` → Zamanlama ve tetikleme iş mantığı
-
-### Sorumluluklar
-
-- Belirli bir tarihte / koşulda gönderilecek outreach görevlerini planlamak.
-- Cron / job runner sistemleri ile entegre edilerek, zaman geldiğinde:
-  - `outreach` + `email` + `whatsapp` modüllerini devreye almak.
-- Lead skorlarına veya event’lere göre otomatik tetikler:
-  - Örn: Brain skoru > 80 olan lead’ler için 24 saat içinde otomatik email gönder.
-
-### Örnek Senaryo
-
-1. Kullanıcı, belirli bir segment lead listesi için 3 adımlı bir outreach sekansı planlar.
-2. `outreachScheduler` her adım için zamanlanmış görevler oluşturur.
-3. Zaman geldiğinde:
-   - `outreach` üzerinden içerik hazırlanır,
-   - `email` / `whatsapp` üzerinden gönderilir,
-   - Sonuçlar CRM ve LeadDashboard’a yansıtılır.
+#### ✔ 2. Enqueue Interface (Future-Proof)  
+Modülün API tasarımı, ileride:  
+- `outreach_jobs` veya `outreach_queue` DB tabloları  
+- worker / cron / scheduler altyapısı  
+- otomatik mesaj gönderimi  
+ile entegre olabilecek şekilde hazırlanmıştır.
 
 ---
+
+### Teknik Yapı  
+
+```
+src/modules/outreachScheduler
+  ├── api
+  │   ├── controller.js
+  │   └── routes.js
+  ├── service.js
+  ├── repo.js
+  └── docs
+      ├── OUTREACH_SCHEDULER.md
+      └── CHANGELOG.md
+```
+
+---
+
+### API ve Veri Akışı  
+
+#### Endpoint  
+| Method | Endpoint | Açıklama |
+|--------|----------|----------|
+| **POST** | `/api/outreach-scheduler/enqueue/:leadId` | Lead için outreach sequence oluşturur |
+
+#### Flow  
+Client  
+→ controller.enqueueOutreachSequenceHandler  
+→ outreachSchedulerService.enqueueSequenceForLead  
+→ outreachService.generateOutreachSequenceForLead  
+→ (Gelecek sürümlerde) repo.saveSequenceJob  
+→ JSON output  
+
+#### Request Body (örnek)  
+```
+{
+  "channel": "whatsapp",
+  "tone": "kurumsal",
+  "language": "tr",
+  "objective": "ilk_temas",
+  "max_followups": 2
+}
+```
+
+#### Response (örnek, kısaltılmış)  
+```
+{
+  "ok": true,
+  "data": {
+    "lead_id": 139,
+    "channel": "whatsapp",
+    "tone": "kurumsal",
+    "language": "tr",
+    "objective": "ilk_temas",
+    "ai_context": {
+      "ai_score_band": "A",
+      "priority_score": 70,
+      "why_now": "…",
+      "risk_level": "medium",
+      "ideal_entry_channel": "whatsapp"
+    },
+    "sequence": [
+      {
+        "step": 1,
+        "type": "initial",
+        "send_after_hours": 0,
+        "message": "Merhaba…"
+      },
+      {
+        "step": 2,
+        "type": "follow_up",
+        "send_after_hours": 48,
+        "message": "İyi günler…"
+      }
+    ]
+  }
+}
+```
+
+---
+
+### Dependencies  
+- `modules/outreach/service.js` → `generateOutreachSequenceForLead`  
+- İleride:  
+  - `modules/whatsapp`  
+  - `modules/email`  
+  - gerçek scheduler / worker sistemi  
+
+---
+
+### Known Limitations (v0.1.0)  
+- Gerçek cron/queue sistemi yok  
+- DB’de job kayıtları henüz tutulmuyor  
+- Gönderim işlemleri yapılmıyor  
+- Endpoint auth’suz (public)  
+- Multichannel paralel gönderim yok  
+
+---
+
+### Future Improvements  
+- `outreach_jobs` tablosu  
+- Worker / cron / retry mekanizması  
+- WhatsApp & Email modülleri ile gerçek entegrasyon  
+- Admin panel job görünümü (cancel / reschedule)  
+- Lead history’e “planned outreach” loglama  
+
+---
+
+### Versioning  
+Detaylar: `OUTREACH_SCHEDULER.md`
 
 ## `research` Modülü
+**Versiyon:** v1.4.0  
+**Konum:** `src/modules/research`  
+**Durum:** Aktif — CNG Intelligence Report (CIR) motoru  
+**Son Güncelleme:** 2025-12-06
 
-**Amaç:** Markalar / rakipler / sektörler için derin araştırma yapmak ve AI destekli, uzun formlu analizler üretmek.  
-**Konum:** `src/modules/research`
+### Amaç
+Research modülü, tek bir lead için farklı kaynaklardan gelen tüm istihbaratı birleştirip **CNG Intelligence Report (CIR)** üretir.  
+CIR, satış ekibinin bir firmayı birkaç saniyede anlayabilmesini sağlayan, sektör bağımsız, tamamen normalize edilmiş bir istihbarat raporudur.
 
-### Yapı
+Modülün görevi:  
+- intel_basic  
+- intel_deep  
+- web search (OSINT)  
+- social presence v2.0  
+- ad_intel  
+- competitors  
+- benchmark  
 
-- `ai/research_master_prompt.md` → Araştırma için kullanılan ana LLM prompt’u
-- `api/routes.js` → `/api/research/*`
-- `controller/controller.js` → HTTP controller
-- `docs/RESEARCH.md` + `docs/CHANGELOG.md`
-- `repo/researchRepo.js` + `repo.js` → Araştırma kayıt tabanları için repo katmanı
-- `service/`:
-  - `adsService.js` → Reklam analizleri (Meta Ads, Google Ads, kreatifler vb.)
-  - `benchmarkService.js` → Benchmark / kıyaslama analizleri
-  - `competitorService.js` → Tekil rakip analizi
-  - `competitorsService.js` → Çoklu rakip analizi
-  - `researchService.js` → Ana research orchestrator servisi
-  - `socialsService.js` → Sosyal medya analizi (Instagram, Facebook, LinkedIn vb. içerik ve etkileşim)
-  - `websearchService.js` → Web araması bazlı analizler
+gibi farklı kaynaklardan gelen verileri toplayıp **tek birleşik standart formatta** CIR üretmek ve bunu lead’e bağlı olarak saklamaktır.
 
-### Sorumluluklar
+---
 
-- Hedef marka / firma için:
-  - Web sitesi, sosyal medya hesapları, reklam kreatifleri, rakipler ve pazar konumlandırması hakkında derin analiz.
-- LLM tabanlı raporlar:
-  - SWOT analizi,
-  - Fırsatlar / tehditler,
-  - Farklılaşma noktaları,
-  - Önerilen iletişim stratejileri.
-- Uzun formlu PDF / rapor çıktıları için backend tarafında bağlam hazırlamak.
+### Sorumluluklar (Updated v1.4.0)
+- Lead bazlı tam araştırma pipeline’ını çalıştırmak  
+- Tüm modüllerden gelen sinyalleri toplamak:
+  - `intel_basic`
+  - `intel_deep`
+  - `web_presence`
+  - `social_presence v2.0` (HTML, OSINT, multi-platform normalizasyon)
+  - `ad_intel`
+  - `competitors`
+  - `benchmark`
+- CIR Output Standardization Engine ile tüm veriyi normalize etmek:
+  - Sektör bağımsız format
+  - Ortak alanlar: `swot`, `digital_status`, `seo`, `agency_opportunities`, `recommended_services`
+  - Model hiçbir sektöre özel davranamaz — yalnızca lead’in verisine göre çalışır
+- CIR sonucunu `lead_intel_reports` tablosuna kaydetmek
+- CIR geçmişini (score + timestamp) sağlamak
 
-### Diğer Modüllerle İlişki
+---
 
-- `intel` ile birlikte “firma dış dünya sinyalleri” tarafını oluşturur.
-- `brain` lead / marka skorlamasında research sonuçlarını kullanabilir.
-- `crm` ve `leadDashboard`, müşteri/proje bazlı background bilgilerini bu modülden alabilir.
+### Public API (Updated)
+
+#### **POST /api/research/full-report**
+Çalıştırır:
+- CIR pipeline  
+- Normalize edilmiş CIR üretimi  
+- DB’ye rapor kaydı  
+
+Response örneği:
+```
+{
+  "ok": true,
+  "data": {
+    "leadId": 139,
+    "leadName": "Firma",
+    "cir": { ... },
+    "raw": { ... }
+  }
+}
+```
+
+#### **GET /api/research/latest/:leadId**
+Lead’in en son CIR raporunu döner.
+
+#### **GET /api/research/all/:leadId**
+Lead’e ait tüm CIR raporlarını döner.
+
+#### **GET /api/research/history/:leadId**
+Skor + timestamp geçmişini döner:
+```
+[
+  { "id": 4, "leadId": 139, "created_at": "...", "score": 75 }
+]
+```
+
+---
+
+### Alt Modüller (Updated)
+
+#### **intel_basic**
+- `analyzeLead({ leadId })`
+- Çıktılar:
+  - SWOT
+  - digital_status
+  - sales_notes
+  - fırsatlar (kısa/uzun vade)
+  - priority_score
+
+#### **intel_deep**
+- `analyzeLeadDeep({ leadId })`
+- Sadece web sitesi varsa çalışır
+- Derin website + SEO + strategic quick wins analizi
+
+#### **Web Search (OSINT)**
+- `runWebSearch(lead)`
+- Sonuç kategorileri:
+  - directories  
+  - news mentions  
+  - blog mentions  
+  - third‑party profiles  
+  - risk flags  
+
+#### **Social Presence v2.0 (NEW)**
+- Platform taraması:
+  - instagram, facebook, linkedin, youtube, tiktok  
+  - twitter/x, behance, dribbble, pinterest  
+- Kaynaklar:
+  - website HTML
+  - OSINT
+- activity_score: 0 / 20 / 40 / 60 / 80 / 100
+
+#### **Ads Intelligence**
+- Pixel + analytics sinyalleri
+- active_ads
+- google_analytics_detected
+- pixel_detected
+
+#### **Competitors**
+- Şehir + kategori bazlı rakip çıkarımı
+- 0–100 arası rakip güç skorları
+
+#### **Benchmark**
+- Pazar ortalaması + lead’in konumu
+- benchmark_score
+- strengths_vs_market
+- weaknesses_vs_market
+
+---
+
+### CIR Output Standardization Engine (NEW v1.4.0)
+
+CIR artık tamamen **sektör bağımsız**, güvenli ve normalize edilmiş bir JSON formatına sahip.
+
+Standart alanlar:
+- `swot`
+- `digital_status`
+- `website_evaluation`
+- `seo`
+- `social_presence`
+- `ad_intel`
+- `competitors`
+- `benchmark`
+- `agency_opportunities`
+- `recommended_services`
+- `priority_score`
+- `notes_for_sales`
+
+Kurallar:
+- ❗ Sektöre özel ifadeler üretilmez  
+- ❗ Tüm değerlendirme yalnızca lead’in kendi verisine göre yapılır  
+- ❗ Model sektörlere öncelik veremez  
+
+Bu motor `researchService.js` içinde LLM yanıtını normalize eder.
+
+---
+
+### Diğer Modüllerle Etkileşim
+
+| Modül | Açıklama |
+|-------|----------|
+| **intel** | Basic + Deep intel verilerini sağlar |
+| **brain** | CIR skorunu lead değerlendirmesinde kullanır |
+| **crm** | CIR özetleri CRM kartında görünür |
+| **leadDashboard** | CIR raporunun özetini UI’a sunar |
+| **godmode** | Lead kaynağı |
+
+---
+
+### Derin Senaryo Örneği
+
+**Senaryo — Yeni müşteri için derin marka analizi**
+
+1. `/api/research/full-report` çağrılır.  
+2. Pipeline:
+   - intel_basic  
+   - intel_deep  
+   - web search  
+   - social_presence v2.0  
+   - competitors  
+   - benchmark  
+3. `CIR Output Standardization Engine` çalışır.  
+4. Rapor:
+   - Lead hakkındaki tüm sinyalleri  
+   - SWOT  
+   - SEO  
+   - website evaluation  
+   - social presence  
+   - risk & fırsatlar  
+   - recommended services  
+   olarak normalize eder.  
+5. Sonuç DB’ye yazılır ve LeadDashboard’a açılır.
+
+---
+
+### Roadmap (Research)
+
+- [x] CIR Pipeline v1.4.0  
+- [x] Social Presence v2.0  
+- [x] Benchmark Engine  
+- [x] Competitor Engine  
+- [ ] Ads real‑time crawler  
+- [ ] Sector Packs (premium industry models)  
+- [ ] Multi-brand comparison mode  
 
 ---
 
 ## `whatsapp` Modülü
+**Versiyon:** v0.1.0  
+**Konum:** `src/modules/whatsapp`  
+**Durum:** Temel – Cloud API entegrasyonu yok, sadece log sistemi  
+**Son Güncelleme:** 2025-12-06
 
-**Amaç:** WhatsApp tabanlı iletişim ve mesaj gönderimi için backend katmanını sağlamak.  
-**Konum:** `src/modules/whatsapp`
+### Amaç
+WhatsApp modülü, ilerleyen sürümlerde WhatsApp Cloud API ile entegre olacak iletişim katmanının çekirdeğidir.  
+Şu anki rolü tamamen altyapı hazırlamaya yöneliktir:
 
-### Yapı
+- WhatsApp mesaj gönderimi **simülasyonu**
+- DB’ye WhatsApp mesaj log’u yazmak
+- Outreach / OutreachScheduler modüllerinin ileri fazdaki entegrasyonuna temel oluşturmak
 
-- `controller.js`
-- `routes.js` → `/api/whatsapp/*`
-- `docs/WHATSAPP.md` + `docs/CHANGELOG.md`
-- `repo.js` → WhatsApp mesaj log’ları ve entegrasyon kayıtları
-- `service.js` → WhatsApp gönderim / alım iş mantığı
+Bu sürümde **gerçek WhatsApp API çağrısı yoktur**.
+
+---
 
 ### Sorumluluklar
 
-- Resmi WhatsApp Business API veya üçüncü parti sağlayıcılarla entegrasyonu sarmalamak.
-- Outreach kampanyaları için WhatsApp kanalını aktif şekilde kullanmak:
-  - İlk mesaj,
-  - Hatırlatma mesajları,
-  - Otomatik cevaplar (ileri fazlarda).
-- Giden / gelen mesajların kaydını tutarak:
-  - CRM notlarına ve LeadDashboard timeline’ına bağlamak.
+#### ✔ WhatsApp Mesaj Loglama
+Gönderim denemeleri `whatsapp_logs` tablosuna kaydedilir.
 
-### Örnek Akış
+Alanlar:
+- `lead_id` (opsiyonel)
+- `phone`
+- `message`
+- `status` (örn: `"pending"`, `"simulated"`)
+- `meta` (JSON string)
+- `created_at`
 
-1. `outreach` modülü, lead için WhatsApp mesaj taslağı üretir.
-2. `whatsapp` modülü bu mesajı WhatsApp API üzerinden gönderir.
-3. Yanıt geldiğinde (webhook veya polling ile) repo’ya kaydedilir.
-4. `crm` ve `leadDashboard` bu mesajı lead geçmişinde gösterir.
+#### ✔ Test Endpoint
+Modülün doğru şekilde:
+- controller
+- service
+- repo
+- DB tablosu
+
+entegre olup olmadığını test etmek için kullanılır.
+
+Gerçek gönderim YOK → yalnızca **simüle edilmiş işlem + log kaydı**.
 
 ---
+
+### Teknik Yapı
+
+```
+src/modules/whatsapp
+  ├── api
+  │   ├── controller.js
+  │   └── routes.js
+  ├── repo.js
+  ├── service.js
+  └── docs
+      ├── WHATSAPP.md
+      └── CHANGELOG.md
+```
+
+- `controller.js`  
+  - `sendTestWhatsappHandler` fonksiyonu → test amaçlı log kaydı
+- `service.js`  
+  - `sendTestMessage()` → WhatsApp mesajını simüle eder, repo’ya log yazdırır
+- `repo.js`  
+  - `logWhatsapp()` → `whatsapp_logs` tablosuna insert
+- `docs/WHATSAPP.md`  
+  - Teknik tasarım, veri modeli ve kullanım örnekleri
+
+---
+
+### API Endpoints
+
+| Method | Endpoint | Açıklama |
+|--------|----------|----------|
+| **POST** | `/api/whatsapp/test` | Test amaçlı WhatsApp mesaj log’u oluşturur |
+
+#### Örnek Response
+```
+{
+  "ok": true,
+  "data": {
+    "ok": true,
+    "id": 1,
+    "note": "WhatsApp module v0.1.0 — Cloud API entegrasyonu henüz yok, sadece log kaydı."
+  }
+}
+```
+
+---
+
+### Data Flow
+
+Client  
+→ `POST /api/whatsapp/test`  
+→ controller (`sendTestWhatsappHandler`)  
+→ service (`sendTestMessage`)  
+→ repo (`logWhatsapp`)  
+→ SQLite (`whatsapp_logs` tablosu)  
+→ JSON response  
+
+---
+
+### Database — `whatsapp_logs`
+
+Alanlar (v0.1.0):
+
+- `id` — INTEGER PRIMARY KEY AUTOINCREMENT  
+- `lead_id` — INTEGER (nullable)  
+- `phone` — TEXT  
+- `message` — TEXT  
+- `status` — TEXT (`"simulated"`)  
+- `meta` — TEXT (JSON)  
+- `created_at` — TEXT (ISO)
+
+Tablo lazy-initialize edilir (CREATE TABLE IF NOT EXISTS).
+
+---
+
+### Known Limitations (v0.1.0)
+
+- ❌ Gerçek WhatsApp Cloud API entegrasyonu yok  
+- ❌ Rate limit / queue / retry mekanizması yok  
+- ❌ Auth kontrolü yok → `/api/whatsapp/test` public  
+- ❌ Delivery / read receipts takibi yok  
+- ❌ Mesaj şablon sistemi yok  
+
+---
+
+### Future Improvements
+
+- ✔ WhatsApp Cloud API gerçek entegrasyonu  
+- ✔ Şablon sistemi (Outreach Sequence entegrasyonu)  
+- ✔ Gönderim & okunma durum takibi  
+- ✔ Admin panelden log görüntüleme / filtreleme  
+- ✔ Queue + Retry + Rate limit altyapısı  
+
+---
+
+### Versioning
+Detaylar: `src/modules/whatsapp/docs/CHANGELOG.md`
 
 ## `xyz` Modülü
 
@@ -743,236 +1906,188 @@ Tüm modüller mümkün olduğunca aynı pattern’i takip eder:
 - Yeni modül eklerken:
   1. `_template` klasörü kopyalanmalı,
   2. Kendi `<MODULE>.md` ve `CHANGELOG.md` dosyaları yazılmalı,
-  3. Gerekirse bu dosyada yeni bir başlık açılarak kısa özet eklenmelidir,
+3. Gerekirse bu dosyada yeni bir başlık açılarak kısa özet eklenmelidir.
 
 
 ---
 
 ## Derinlemesine Örnek Senaryolar
 
-Bu bölüm, modüllerin birlikte nasıl çalıştığını göstermek için uçtan uca (end-to-end) örnek akışları anlatır.  
-Amaç: Yeni bir geliştirici ya da product tarafı, gerçek dünyadaki bir iş ihtiyacının backend’de hangi modülleri nasıl tetiklediğini net görebilsin.
-
-### Senaryo 1 — Yeni Pazar için Lead Keşfi ve İlk Outreach (GODMODE → Intel/Research → Brain → Outreach/Email/WhatsApp → CRM → LeadDashboard)
-
-**İş ihtiyacı:**  
-CNG, “İstanbul’daki mimarlık ofisleri ve belirli segmentte güzellik merkezleri” için yeni bir müşteri edinme kampanyası başlatmak istiyor.
-
-**Adım adım akış:**
-
-1. **GODMODE Discovery Job Oluşturma**
-   - Kullanıcı (veya internal job) şuna benzer bir payload ile istek atar:
-     - `city`: "İstanbul"
-     - `country`: "Türkiye"
-     - `categories`: ["mimarlık ofisi", "güzellik merkezi"]
-     - `minGoogleRating`: 3.5
-     - `maxResults`: 250
-     - `channels`: ["google_places", ... (ileride diğer provider’lar)]
-   - İstek, `godmode/api/controller.js` içindeki `createDiscoveryScanJob` handler’ına gelir.
-   - Controller:
-     - `validator.js` ile input’u doğrular.
-     - `service.js` içindeki `createDiscoveryScanJob` fonksiyonunu çağırır.
-     - `repo.js` üzerinden:
-       - `godmode_jobs` tablosuna yeni satır eklenir.
-       - `godmode_job_logs` tablosuna `QUEUED` event’i yazılır.
-
-2. **Discovery Job Çalıştırma (Run)**
-   - `/api/godmode/jobs/:id/run` çağrılır.
-   - Controller, `godmodeService.runJob(jobId)` fonksiyonunu tetikler.
-   - `runJob`:
-     - Job’ı DB’den yükler (`repo.getJobById`).
-     - Status → `running` yapar, `godmode_job_logs`’a `RUN_START` yazar.
-     - `providersRunner.runProvidersForJob(...)` fonksiyonu üzerinden:
-       - Şu an için `googlePlacesProvider` devrededir.
-       - Faz 2’de diğer provider’lar (LinkedIn, Instagram, Facebook, vb.) buraya eklenir.
-     - Her provider sayfası için:
-       - Ham sonuçlar normalize edilir.
-       - `potential_leads` tablosuna **upsert** edilir (duplicateler engellenir).
-       - `godmode_job_logs` tablosuna `PROVIDER_PAGE` event’i yazılır.
-     - Job tamamlandığında:
-       - `godmode_job_results` tablosuna özet (`result_summary_json`) ve gerekirse `raw_results_json` yazılır.
-       - `godmode_jobs` → `status = completed`, `progress_percent = 100`.
-       - `godmode_job_logs` → `COMPLETED` event’i eklenir.
-
-3. **Lead Havuzunun Oluşması (potential_leads)**
-   - `dataFeederWorker` (workers/dataFeederWorker.js) pipeline sonunda tetiklenir.
-   - Bu worker:
-     - Job’ın normalize edilmiş lead’lerini alır.
-     - `potential_leads` tablosuna şehir / kategori / provider bilgileriyle beraber kaydeder.
-     - Varsayılan dedup mantığı ile aynı place_id / provider kombinasyonunun tekrar eklenmesini engeller.
-   - Sonuç: Artık sistemde, İstanbul’daki mimarlık ofisleri ve güzellik merkezleri için normalize edilmiş ve tekilleştirilmiş bir lead havuzu vardır.
-
-4. **Intel & Research ile Derin Analiz**
-   - Sistem, belirli lead’ler için:
-     - `intel` modülü üzerinden:
-       - Web sitesi on-page analizini (`seoOnpageService` + `shared/seo/onpageAnalyzer`) çalıştırır.
-       - SEO / içerik / marka mesajı sinyalleri çıkarır.
-     - `research` modülü üzerinden:
-       - Reklam, sosyal medya, rakip ve pazar analizleri (`adsService`, `socialsService`, `competitorService`, `websearchService`) çalıştırılabilir.
-   - Bu çağrılar:
-     - İster manuel (UI’den) ister otomatik (worker / job) tetiklenebilir.
-   - Elde edilen sonuçlar:
-     - İlgili intel / research tablolarına yazılır ve lead ile ilişkilendirilir.
-
-5. **Brain ile AI Tabanlı Değerlendirme**
-   - `brain` modülü, belirli lead’ler için:
-     - Discovery kaynak bilgisi (GODMODE / discovery),
-     - Intel (website/SEO),
-     - Research (pazar/rakip),
-     - CRM (varsa),
-     - Outreach geçmişi (varsa)
-     gibi verileri bir araya getirir.
-   - `brainService` bu sinyallerden:
-     - Lead AI Score,
-     - Fırsat / risk skorları,
-     - Önerilen segment / kategori gibi üst seviye çıktılar üretir.
-   - Bu skorlar DB’de saklanır ve LeadDashboard’a açılır.
-
-6. **Outreach + Email + WhatsApp ile İlk Temas**
-   - Satış ekibi veya otomasyon sistemi, belirli bir segment (örneğin AI score > 80 ve belirli bir kategori) için kampanya başlatır.
-   - `outreach` modülü:
-     - `first_contact_message.md` ve diğer prompt’lar üzerinden kanal bazlı mesaj içerikleri üretir:
-       - Email için uzun / orta uzunlukta metin,
-       - WhatsApp için daha kısa, direkt mesaj,
-       - Gerekirse sosyal medya DM için adaptasyonlar.
-   - `email` ve `whatsapp` modülleri:
-     - Üretilen mesajı ilgili kanala gönderir.
-     - Başarılı / başarısız log’ları DB’ye yazar.
-   - `outreachScheduler`:
-     - Eğer kampanya bir sekans içeriyorsa, sonraki adım mesajlarını zamanlar.
-     - Gecikmeli follow-up, hatırlatma vb. görevleri yönetir.
-
-7. **CRM ve LeadDashboard’da Görünürlük**
-   - `crm` modülü:
-     - Görüşme notları,
-     - Otomatik / manuel eklenen durum değişiklikleri,
-     - LLM ile üretilen CRM Brain özetlerini saklar.
-   - `leadDashboard`:
-     - Tek bir endpoint üzerinden:
-       - GODMODE / discovery kaynağını,
-       - Intel / Research sonuçlarını,
-       - Brain skorlarını,
-       - Outreach (email/whatsapp) geçmişini,
-       - CRM notlarını ve beyin özetlerini
-       birleştirir ve UI’a döner.
-   - Sonuç: Satış ekibi tek ekranda hem lead’in “nereden geldiğini” hem de “aradaki tüm akışı” görebilir.
+Bu bölüm, backend-v2 içindeki **güncel modül mimarisine** göre uçtan uca çalışan iş akışlarını modernize eder.  
+Amaç: Yeni gelen bir geliştirici veya ürün yöneticisi, gerçek iş süreçlerinin backend’de hangi modüller tarafından nasıl yürütüldüğünü tek bakışta anlayabilsin.
 
 ---
 
-### Senaryo 2 — Mevcut Müşteri için Derin Marka Analizi (Research → Intel → Brain → CRM)
+# 🟦 Senaryo 1 — Yeni Pazar Tarama → Derin Intel → CIR → Brain → Outreach → CRM → LeadDashboard
+**Amaç:** İstanbul mimarlık ofisleri için yeni müşteri edinme sürecini otomatik yürütmek.
 
-**İş ihtiyacı:**  
-Halihazırda müşterimiz olan bir markanın, yeni kampanya planlaması öncesi “derin analiz raporu” hazırlanmak isteniyor.
+### 1) GODMODE ile Discovery (Faz 1 – v1.0.0-live)
+- `/api/godmode/jobs/discovery-scan`
+- Job oluşturulur → `queued`
+- Çalıştırma (`/run`) → `running`
+- Google Places provider çalışır
+- Normalize lead’ler → `potential_leads` tablosuna UPSERT edilir
+- Event logs: `QUEUED` → `RUN_START` → `PROVIDER_PAGE` → `COMPLETED`
 
-1. **Müşteri / Marka Seçimi**
-   - UI veya internal bir araç üzerinden müşteri seçilir.
-   - İlgili müşteri / lead ID’si üzerinden:
-     - Website URL,
-     - Sosyal medya profilleri,
-     - Reklam hesapları (varsa) gibi bilgiler okunur (genellikle `intel` ve `research` modüllerinin girdi seti).
-
-2. **Research Modülünün Çalışması**
-   - `researchService`:
-     - `websearchService` ile markanın genel web görünürlüğünü tarar.
-     - `socialsService` ile Instagram, Facebook, LinkedIn gibi platformlar üzerinden:
-       - İçerik sıklığı,
-       - Gönderi türleri,
-       - Etkileşim oranlarını analiz eder.
-     - `adsService` ile reklam kreatifleri, mesaj tonları, call-to-action kalıpları incelenebilir (imkan olduğu ölçüde).
-     - `competitorService` ve `competitorsService` ile:
-       - Rakip listesi ve rakiplerin konumlanması çıkarılır.
-     - Sonuçlar:
-       - `researchRepo` üzerinden ilgili tabloya yazılır ve müşteri/lead ile ilişkilendirilir.
-
-3. **Intel ile Website / SEO Katmanı**
-   - `intel` modülü, markanın web sitesi için:
-     - On-page SEO analizi (title, meta, H1-H2 yapısı, içerik, teknik detaylar),
-     - İçerik / sayfa yapısı,
-     - Marka mesajlaşması (hangi söylemler öne çıkarılmış?) gibi sinyaller üretir.
-   - Çıktılar intel tablolarına kaydedilir.
-
-4. **Brain Üzerinden Stratejik Özet**
-   - `brainService`, hem `research` hem `intel` çıktılarıyla birlikte:
-     - Sektördeki konumu,
-     - Rakiplerine göre avantaj/dezavantajları,
-     - Dijital varlık kalitesi,
-     - Perfect-fit müşteri segmentleri gibi noktaları skorlayabilir.
-   - Bu skorlar, markaya özel bir “brain snapshot” oluşturmak için kullanılabilir.
-
-5. **CRM ve Dokümantasyon**
-   - `crm` modülü:
-     - Bu analiz sürecine ait notları ve genel özetleri lead/müşteri kartına işler.
-     - LLM tabanlı bir “kısa özet” ve “uzun stratejik özet” üretilebilir.
-   - Swagger / dış doküman ile birlikte:
-     - Müşteriye sunulacak PDF veya sunumun veri kaynağı bu modüllerden alınır.
+**Sonuç:** Tekilleştirilmiş, normalize edilmiş lead havuzu oluştu.
 
 ---
 
-### Senaryo 3 — Admin Paneli ile Sistem Sağlığı ve Performans İzleme (Admin → GODMODE → Outreach → DB)
+### 2) Intel Basic + SEO On-Page Tarama (v1.3.0)
+Lead seçildi →  
+`POST /api/intel/analyze`  
+- Website HTML çekilir  
+- Basic intel üretimi  
+- On‑Page SEO sinyalleri  
+- SWOT + digital_status + priority_score  
+- Kayıt: `lead_search_intel`
 
-**İş ihtiyacı:**  
-Admin kullanıcı, sistemin genel durumunu hızlıca görmek istiyor: son discovery job’ları, hata oranları, outreach performansı vb.
-
-1. **Admin İsteği**
-   - Admin panel UI, oturum açmış bir admin kullanıcı için `/api/admin/stats` veya benzeri endpoint’i çağırır.
-   - Bu endpoint, `admin/api/controller.js` içinde tanımlıdır ve `adminService`’i kullanır.
-
-2. **AdminService’in Veri Toplaması**
-   - `adminService`:
-     - `godmode.repo` üzerinden:
-       - Son X job,
-       - Başarılı / başarısız job sayıları,
-       - Ortalama job süresi gibi istatistikleri çeker.
-     - Discovery / potential_leads tablolarından:
-       - Son günlerde bulunan yeni lead sayısını,
-       - Provider bazlı dağılımı (Google Places, ileride LinkedIn vb.).
-     - Outreach / email / whatsapp modüllerinin repo’larından:
-       - Gönderilen mesaj sayıları,
-       - Başarılı / hata oranları,
-       - Kampanya bazlı performanslar.
-
-3. **Özet JSON Dönüşü**
-   - Controller, tüm bu verileri tek bir JSON içinde toparlayarak UI’a döner.
-   - UI bu bilgiyi:
-     - Grafikler,
-     - Kartlar,
-     - Tablo görünümleri ile admin’e gösterir.
-
-4. **Sorun Analizi**
-   - Örneğin son 24 saatte GODMODE job hata oranı yükseldiyse:
-     - Admin, job log’larını (`godmode_job_logs`) inceleyerek hangi provider’ın sık hata verdiğini görebilir.
-     - Gerekirse ilgili provider geçici olarak devre dışı bırakılabilir (Faz 2 PAL / provider health check).
+**Sonuç:** Lead’in dijital olgunluğu ve temel SWOT hazır.
 
 ---
 
-### Senaryo 4 — Basit Discovery ve AI Ranker ile Hızlı Fırsat Listesi (Discovery → Brain / LeadDashboard)
+### 3) Intel Deep Website Analysis (v1.3.0)
+`POST /api/intel/deep-analyze`
+- Tüm site yapısı incelenir
+- Branding, CTA, IA, mesaj analizi
+- SEO derin tarama
+- Kayıt: `lead_intel_reports`
 
-**İş ihtiyacı:**  
-Daha basit bir kullanımda, GODMODE’u kullanmadan sadece `discovery` modülü ile kısa süre içinde “ilk bakış lead listesi” oluşturmak.
-
-1. **Discovery API Çağrısı**
-   - UI veya script, `/api/discovery/search` gibi bir endpoint’e (modül tasarımına göre) şehir + kategori parametreleriyle istek atar.
-   - `discovery/controller.js` istek parametrelerini alır, `discovery/service.js`’i çağırır.
-
-2. **PlacesClient ile Veri Çekme**
-   - `placesClient.js`, Google Places gibi kaynaklardan basit arama yapar.
-   - Sonuçlar normalize edilir ve `discovery/repo.js` üzerinden DB’ye kaydedilebilir veya direkt response olarak dönebilir.
-
-3. **AI Ranker ile Önceliklendirme**
-   - `aiRanker.js`, bulunan lead’leri iş kurallarına / AI modeline göre skorlar:
-     - Örneğin:
-       - Rating,
-       - Review sayısı,
-       - Belirli anahtar kelimeler,
-       - Konum gibi parametreleri kullanarak.
-
-4. **LeadDashboard Entegrasyonu**
-   - Discovery modülü, lead’leri `potential_leads` veya discovery’ye özel tablolara yazar.
-   - `leadDashboard` bu lead’leri çekerek basit bir “quick wins list” üretmek için kullanılabilir.
+**Sonuç:** Lead için tam website raporu hazır.
 
 ---
 
-Bu senaryolar, modüllerin birbirleriyle nasıl konuştuğunu gösteren temel örneklerdir.  
-Yeni özellikler eklendikçe ve GODMODE Faz 2–3–4 ilerledikçe, buraya yeni senaryolar (örneğin tam otomatik outreach, sektör bazlı sürekli tarama, multi-tenant kullanım vb.) eklenmelidir.
+### 4) Research v1.4.0 — CNG Intelligence Report (CIR)
+`POST /api/research/full-report`
+- intel_basic
+- intel_deep
+- web_search (OSINT)
+- social_presence v2.0
+- competitors
+- benchmark
+- Ads intel (pixel/analytics)
 
+CIR Output Standardization Engine devreye girer → sektör bağımsız normalize rapor.
 
+Kayıt: `lead_intel_reports` (CIR türü)
+
+**Sonuç:** Tek formatta birleşik istihbarat raporu.
+
+---
+
+### 5) Brain — Lead AI Brain Snapshot (v1.0)
+`GET /api/brain/lead/:id`
+- GODMODE sinyalleri
+- Intel sinyalleri
+- CIR sonuçları
+- CRM notları
+- Outreach geçmişi
+
+LLM üzerinden:
+- AI Score
+- Opportunity level
+- Risk level
+- Key signals
+- Strategy summary
+
+Kayıt: `lead_brain_snapshots`
+
+**Sonuç:** Lead’in tam yapay zekâ değerlendirmesi hazır.
+
+---
+
+### 6) Outreach Sequence (v2.1.0)
+`POST /api/outreach/sequence/:leadId`
+- Kanal: whatsapp/email
+- Tone: premium/kurumsal/samimi
+- objective
+- max_followups
+- INTEL + CIR + Brain sinyalleri kullanılır
+
+**Sonuç:** Çok adımlı AI outreach sekansı üretilir.
+
+---
+
+### 7) Outreach Scheduler (v0.1.0)
+`POST /api/outreach-scheduler/enqueue/:leadId`
+- Sequence sarılır
+- Gelecekte queue/cron için hazır API yapısı
+
+**Sonuç:** Sequence planlama API’si (future-proof).
+
+---
+
+### 8) CRM — Lead Relationship Management (v1.1.0)
+- Notlar → `lead_crm_notes`
+- Status → new/warm/hot/client/lost
+- CRM Brain Summary → `lead_crm_brains`
+
+**Sonuç:** Lead’in ilişki geçmişi + AI CRM özetleri hazır.
+
+---
+
+### 9) LeadDashboard v1.2.0 — Tek Endpointte Tüm Özet
+`GET /api/leads/:leadId/ai-dashboard`
+
+Toplanan tüm modül çıktıları tek JSON’da birleşir:
+- lead
+- intel
+- research (CIR)
+- brain
+- crm
+- outreach
+- meta
+
+**Sonuç:** Satış ekibinin ihtiyaç duyduğu tüm bilgi tek API çağrısında.
+
+---
+
+# 🟩 Senaryo 2 — Mevcut Müşteri için Derin Marka Analizi (Intel + CIR + Brain)
+1. Müşteri seçilir → website + sosyal profiller biliniyor.  
+2. Intel Analyze → Basic Intel + SEO teknik analiz  
+3. Intel Deep → tam site içeriği + IA + CTA + branding  
+4. Research Full Report → derin OSINT + rakip + benchmark + social presence v2.0  
+5. Brain → AI Score + fırsat/tehdit seviyesi + stratejik özet  
+6. CRM → analiz notları + CRM Brain  
+7. LeadDashboard → tek ekranda marka durumu
+
+**Sonuç:** Müşteri için tam kapsamlı stratejik analiz.
+
+---
+
+# 🟧 Senaryo 3 — Admin Panel Üzerinden Sistem Sağlığı İzleme
+1. `/api/admin/status`  
+2. `/api/admin/modules`  
+3. `/api/admin/overview`
+
+AdminService:
+- GODMODE job istatistikleri
+- Discovery lead sayıları
+- Outreach test logları (email/whatsapp)
+- DB health snapshot
+
+**Sonuç:** Sistem yöneticisi backend’in tüm durumunu tek ekrandan izler.
+
+---
+
+# 🟨 Senaryo 4 — Discovery Modülü ile Hızlı Fırsat Listesi
+Discovery (eski hafif tarama motoru):
+1. `/api/discovery/search`
+2. Normalize leads → opsiyonel DB log
+3. AI Ranker → skor üretimi
+4. LeadDashboard → hafif hızlı görünüm
+
+**Sonuç:** GODMODE’a gerek olmadan çok hızlı discovery + skor listesi.
+
+---
+
+# 🟪 Senaryo 5 — Tam Otomatik Outreach (Future Scenario)
+Faz 2–3 entegrasyonuyla:
+- GODMODE → sürekli tarama
+- Intel → otomatik basic intel
+- Research → otomatik CIR
+- Brain → AI score tetikleyici
+- OutreachScheduler → job queue + cron
+- WhatsApp/Email → gerçek API gönderimleri
+
+**Sonuç:** CNG AI Agent tam otomatik müşteri edinme makinesine dönüşür.
