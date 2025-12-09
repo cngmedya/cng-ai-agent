@@ -31,24 +31,7 @@ Aşağıdaki değişkenler sistem için kritiktir:
 
 ```
 PORT=4000
-OPENAI_API_KEY=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
-GOOGLE_PLACES_API_KEY=AIzaSyDVFtV8wPr6NUBAFoiSmkQueiI7sknwdzU
-CNG_INTERNAL_API_KEY=super-gizli-cng-internal-key-987
-WHATSAPP_MOCK_MODE=1
-WHATSAPP_API_URL=https://graph.facebook.com/v20.0
-META_WHATSAPP_ACCESS_TOKEN=
-META_WHATSAPP_PHONE_NUMBER_ID=
-WHATSAPP_VERIFY_TOKEN=super-secret-verify-token
-GODMODE_DISCOVERY_MODE=1
-R2_ACCESS_TOKEN=Kv-c0aX2ZtGrBy1yPTxl7YqrAJDQAY3-8bpFo50F
-R2_ACCOUNT_ID=b2152640cbcba3f6ffc1bd5f70d6578c
-R2_ACCESS_KEY_ID=AKIA...
-R2_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxx
-R2_BUCKET_NAME=cng-ai-media
-R2_PUBLIC_BASE_URL=https://pub-ccee20fd320b4d63b632cf6b88a7f073.r2.dev
-R2_S3_ENDPOINT=https://b2152640cbcba3f6ffc1bd5f70d6578c.r2.cloudflarestorage.com
-CNG_ENV=development
-```
+
 
 ⚠️ **Not:** Bu dosyada gerçek anahtar saklama! Sadece roller listesi burada bulunur.
 
