@@ -28,3 +28,9 @@ backend/test-*.json*
 backend_v1_backup_*/
 backend/
 trm.md
+
+# local databases
+backend-v2/data/*.sqlite
+backend-v2/data/*.sqlite-*
+backend-v2/src/data/*.sqlite
+backend-v2/src/data/*.sqlite-*
