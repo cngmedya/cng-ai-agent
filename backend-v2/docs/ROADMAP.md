@@ -74,7 +74,8 @@ Godmode özel roadmap → `src/modules/godmode/docs/GODMODE_ROADMAP.md`
 
 # 📌 FAZ 2 — GODMODE & OMNI-DISCOVERY (Aktif)  
 **Amaç: Çoklu sağlayıcılarla çalışan, veri birleştiren ve tam otomatik discovery motoru.**  
-**Mevcut durum:** Google Places, Provider Abstraction Layer üzerinden stabilize edildi; diğer providerlar ve deep-enrichment henüz plan/faz-içi aşamada.
+**Mevcut durum:** Google Places, Provider Abstraction Layer üzerinden stabilize edildi.  
+Deep-enrichment hattı **aktif ve çalışır durumdadır** (website + tech fingerprint); SEO, social ve ad sinyalleri faz-içi geliştirme kapsamındadır.
 
 Bu fazın tüm ayrıntılı teknik planı için:  
 ➡ `src/modules/godmode/docs/GODMODE_ROADMAP.md`
@@ -105,11 +106,18 @@ Providers:
 - [ ] “Already-discovered protection” (Aynı firmayı tekrar işlememe sistemi)
 
 ### 2.D — Deep Enrichment v2  
-- [ ] Tech stack detection (Wappalyzer-Lite)  
-- [ ] Social footprint  
-- [ ] SEO scoring  
-- [ ] Ad signals (Meta/Google tags)  
-- [ ] AI-ranker integration v2  
+**Durum:** Aktif – kısmi tamamlandı
+
+- [x] 2.D.3.1 Website fetch (Google Places + Place Details fallback)
+- [x] 2.D.3.1 Tech fingerprint (stub, provider-safe)
+- [x] Deep enrichment manuel consumer (job bazlı tetikleme)
+- [x] Observability & job event logs
+- [x] Idempotent enrichment execution (jobId + placeId)
+
+- [ ] 2.D.3.2 SEO signals (indexability, meta, schema)
+- [ ] 2.D.3.3 Social footprint enrichment
+- [ ] 2.D.3.4 Ad / tracking signals
+- [ ] 2.D.3.5 AI-ranker integration v2  
 
 ---
 
@@ -241,19 +249,19 @@ Aşağıdaki mini‑checklist'ler her modülün sprint sırasında tamamlanması
 
 ---
 
-## 4) GODMODE MODULE  
-- [ ] Job create  
-- [ ] Job run  
-- [ ] Job progress  
-- [ ] Job summary  
-- [ ] ProviderRunner v2  
-- [ ] Multi-provider interface  
-- [ ] Deep-enrichment hook  
-- [ ] Worker orchestration  
-- [ ] Job event logs  
-- [ ] Duplicate protection (fingerprinting)  
-- [ ] Already‑discovered prevention  
-- [ ] Error propagation system  
+## 4) GODMODE MODULE
+- [x] Job create
+- [x] Job run
+- [x] Job progress
+- [x] Job summary
+- [x] ProviderRunner v2
+- [x] Multi-provider interface
+- [x] Deep-enrichment hook
+- [x] Job event logs
+- [ ] Worker orchestration (advanced)
+- [ ] Duplicate protection (fingerprinting)
+- [ ] Already‑discovered prevention
+- [ ] Error propagation system
 - [ ] GODMODE Dashboard API (v1)
 
 ---
