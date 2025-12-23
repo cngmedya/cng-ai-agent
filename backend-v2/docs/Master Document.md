@@ -16,8 +16,47 @@ Bu dosyanın amacı:
 
 1. Sistemin **genel mantığını**, **başlangıç hedefini** ve **scope’unu** özetlemek
 2. Ana **iş akışını** ve **modüller arası ilişkiyi** tek bakışta göstermek
-3. “Şu anki durum”u (2025-12-09 itibarıyla) kayda geçirmek
+3. “Şu anki durum”u (2025-12-23 itibarıyla) kayda geçirmek
 4. Gelecekteki sohbetlerde **“süper hafıza giriş noktası (ZeroPoint)”** olarak kullanılmak
+
+---
+
+## 0.1 Son Güncelleme — 2025-12-23 (Yeni Sohbete Devir Notu)
+
+Bu bölüm, son geliştirme oturumunda yapılan kritik değişiklikleri **kayıt altına almak** ve yeni sohbete geçtiğimizde **hafıza kaybı yaşamadan** devam edebilmek için eklenmiştir.
+
+### 0.1.1 Bu oturumda dokunulan modüller
+
+- **godmode** (ana odak): discovery job akışı, provider runner, enrichment tetikleme, job log/summary doğrulamaları
+- **research**: CIR (full report) tarafındaki kırmızı hataların giderilmesi ve smoke test stabilizasyonu
+- **outreach**: CIR sonrası akışta kırmızıya düşen senaryoların toparlanması (smoke test uyumu)
+- **core/app**: `app.js` route mount ve genel başlatma/smoke test akışında kırılgan noktaların kapatılması
+
+### 0.1.2 Operasyonel doğrular (kanıtlanmış)
+
+- **Servis portu:** `4000` (lokal geliştirme standardı)
+- **Smoke test standardı:** `./scripts/smoke_test.sh` 
+- **DB canonical yolları:** `data/app.sqlite` ve `data/crm.sqlite`
+- `.env` değişkenleri terminale **export edilmeden** çalıştırıldığında `MISSING` görülebilir; standart kullanım `.env` + `npm start` üzerinden doğrulanır.
+
+### 0.1.3 Godmode — Faz 2 ilerleme özeti
+
+- Discovery job create/run akışı stabil doğrulandı.
+- Provider katmanında canlı testlerde **rate-limit riski** nedeniyle 429 kovalamak yerine kontrollü yaklaşım benimsendi.
+- Deep enrichment tetikleme/consumer çağırma tarafı için izlenebilirlik (logs) güçlendirildi.
+- Job log ve job progress kontrolleri ile "stuck" senaryolarının teşhisi standardize edildi.
+
+### 0.1.4 Research (CIR) — stabilizasyon notu
+
+- CIR full report kırmızıya düşüren sorunlar giderildi; smoke testte **yeşil** hedeflendi.
+- CIR ile ilgili DB/migration tarafında isimlendirme ve yol uyumsuzluklarına karşı troubleshooting yaklaşımı netleştirildi.
+
+### 0.1.5 Yeni sohbetten devam edeceğimiz yer
+
+- **Godmode Roadmap:** Faz 2 içinde bir sonraki adım **2.b.6.2**
+- Devam etmeden önce yapılacaklar:
+  - `./scripts/smoke_test.sh` → **yeşil**
+  - Ardından `src/modules/godmode/docs/GODMODE_ROADMAP.md` üzerinden kaldığımız adımı doğrula
 
 ---
 
@@ -151,7 +190,7 @@ DB şemalarının detayı: `src/core/docs/CORE_DB.md`
 
 ---
 
-## 5. Şu Anki Durum (2025-12-09 Snapshot)
+## 5. Şu Anki Durum (2025-12-23 Snapshot)
 
 Bu bölüm, backend-v2’nin “şu an nerede olduğu”nu kayda geçirir.
 Her büyük değişiklik sonrası güncellenmelidir.
@@ -162,6 +201,9 @@ Her büyük değişiklik sonrası güncellenmelidir.
   - Core katmanlar, modül pattern’i, docs yapısı stabil.
 - Temel modüller (auth, admin, discovery, email, intel, research, outreach, outreachScheduler, crm, leadDashboard, whatsapp) **çalışan bir mimari** etrafında konumlanmış durumda.
 - Godmode modülü, discovery tarafının **gelecekteki ana motoru** olarak konumlandı.
+- Smoke test, sistem bütünlüğünün "tek komut" doğrulaması olarak standartlaştırıldı.
+- Port standardı `4000` olarak netleşti; dokümantasyon ve test komutları buna göre hizalandı.
+- DB canonical konumlandırma `data/` altında kabul edildi (legacy yollar sadece uyumluluk için kullanılabilir).
 
 ### 5.2. GODMODE Durumu
 
@@ -184,14 +226,13 @@ Her büyük değişiklik sonrası güncellenmelidir.
 
 ### 5.3. Diğer Modüller
 
-Detay per-modül statüleri modül dokümanlarında (`src/modules/**/docs/*.md`) tutulabilir, burada üst seviye:
+Bu oturumda **doğrudan müdahale edilen** modüller: `research` (CIR), `outreach` (CIR sonrası akış), `core/app` (route mount & startup dayanıklılığı).
 
-- **Auth / Admin** → Sistemin temel güvenlik ve yönetim iskeleti olarak hazır.
-- **Discovery** → Legacy / lightweight discovery ihtiyacı için kullanılabilir durumda.
-- **Intel / Research** → Lead dış dünya zeka üretimi için ana taşıyıcı; geliştirme ve genişletme alanı büyük.
-- **CRM / Brain** → Lead beyni ve ilişki durumu tarafını üstleniyor; zamanla daha da derinleştirilecek.
-- **Outreach / Email / WhatsApp / OutreachScheduler** → Lead’lere ulaşma ve follow-up akışlarını omuzluyor.
-- **LeadDashboard** → Tüm bu veriyi tek pencerede toplamak için okuma modeli gibi davranıyor.
+- **Research (CIR)** → Smoke testte kırmızıya düşen CIR full-report hattı stabilize edildi.
+- **Outreach** → CIR ile ilişkili senaryolarda smoke test uyumu sağlandı.
+- **Core / App** → `app.js` route mount ve çalıştırma akışında kırılgan noktalar kapatıldı.
+
+Diğer modüller genel olarak mevcut mimari içinde çalışır durumdadır; ayrıntı ve değişiklik geçmişi için ilgili modül dokümanları ve `docs/devlogs/` referans alınır.
 
 ---
 

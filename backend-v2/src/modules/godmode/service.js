@@ -2,7 +2,7 @@
 
 const os = require('os');
 const { v4: uuidv4 } = require('uuid');
-const { runDiscoveryProviders } = require('./providers/providersRunner');
+const { runDiscoveryProviders, healthCheckProviders } = require('./providers/providersRunner');
 
 const {
   loadAllJobs,
@@ -10,12 +10,29 @@ const {
   updateJob,
   getJobById: getJobFromDb,
   appendJobLog,
+  upsertPotentialLead,
+  enqueueDeepEnrichmentCandidates,
+  appendDeepEnrichmentStage,
 } = require('./repo');
 
 /**
  * In-memory job store (v1.x) + SQLite sync
  */
 const jobs = new Map();
+
+const FRESHNESS_WINDOW_HOURS = Number(
+  process.env.GODMODE_FRESHNESS_WINDOW_HOURS || 168,
+);
+
+// FAZ 2.D Deep Enrichment gating + observability flags
+const ENABLE_DEEP_ENRICHMENT = process.env.GODMODE_DEEP_ENRICHMENT === '1';
+const DEEP_ENRICHMENT_SOURCES = (process.env.GODMODE_DEEP_ENRICHMENT_SOURCES || 'website,tech,seo,social')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const COLLECT_DEEP_ENRICHMENT_IDS = process.env.GODMODE_DEEP_ENRICHMENT_COLLECT_IDS === '1';
+const DEEP_ENRICHMENT_IDS_CAP = Number(process.env.GODMODE_DEEP_ENRICHMENT_IDS_CAP || 200);
+const DEEP_ENRICHMENT_QUEUE_CHUNK = Number(process.env.GODMODE_DEEP_ENRICHMENT_QUEUE_CHUNK || 50);
 
 /**
  * MODE:
@@ -61,28 +78,6 @@ function logJobEvent(jobId, eventType, payload) {
   }
 }
 
-/**
- * INTERNAL: Worker orchestration stub (Faz 1.G)
- * Discovery tamamlandığında dataFeederWorker tetikleme noktası.
- * Faz 2’de gerçek queue / worker pipeline ile değiştirilecek.
- */
-function triggerPostDiscoveryWorkers(job) {
-  try {
-    console.log(
-      '[GODMODE][WORKER_STUB] dataFeederWorker would be triggered for job',
-      job.id,
-    );
-    // İlerleyen fazlarda:
-    // - Queue push
-    // - dataFeederWorker / entityResolverWorker / economicAnalyzerWorker entegrasyonu
-  } catch (err) {
-    console.error(
-      '[GODMODE][WORKER_STUB][ERROR] jobId=',
-      job.id,
-      err.message || err,
-    );
-  }
-}
 
 /**
  * Startup’ta DB’den job’ları hydrate et.
@@ -137,6 +132,33 @@ function getStatus() {
 }
 
 /**
+ * /api/godmode/providers/health
+ * Provider health snapshot (PAL)
+ * Stable, non-nested response shape (no providers.providers nesting)
+ */
+async function getProvidersHealth() {
+  const snapshot = await healthCheckProviders();
+
+  const providers = snapshot && snapshot.providers ? snapshot.providers : {};
+  const summary =
+    snapshot && snapshot.summary
+      ? snapshot.summary
+      : {
+          total: Object.keys(providers).length,
+          healthy: Object.values(providers).filter(p => p && p.ok === true)
+            .length,
+          unhealthy: Object.values(providers).filter(p => !p || p.ok !== true)
+            .length,
+        };
+
+  return {
+    providers,
+    summary,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
  * Job helper’ları
  */
 function getJob(id) {
@@ -182,6 +204,104 @@ function clampMaxResults(value) {
   if (!Number.isFinite(n) || n <= 0) return 50;
   if (n > 250) return 250;
   return n;
+}
+
+// FAZ 2.C.4 Provider Bazlı Weighting (Lead Ranking v1)
+function parseProviderWeightsFromEnv() {
+  const raw = process.env.GODMODE_PROVIDER_WEIGHTS;
+  if (!raw || typeof raw !== 'string') return null;
+
+  const out = {};
+  const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+
+  for (const p of parts) {
+    const [kRaw, vRaw] = p.split('=').map(s => (s || '').trim());
+    if (!kRaw) continue;
+
+    const n = Number(vRaw);
+    if (!Number.isFinite(n)) continue;
+
+    // 0..2 güvenli aralık
+    out[kRaw] = Math.max(0, Math.min(2, n));
+  }
+
+  return Object.keys(out).length ? out : null;
+}
+
+function resolveProviderWeights(criteria, providersUsed) {
+  const fromCriteria =
+    criteria && typeof criteria === 'object' && criteria.providerWeights &&
+    typeof criteria.providerWeights === 'object'
+      ? criteria.providerWeights
+      : null;
+
+  const fromEnv = parseProviderWeightsFromEnv();
+
+  const weights = {};
+
+  // default 1.0
+  (Array.isArray(providersUsed) ? providersUsed : []).forEach(p => {
+    if (p) weights[p] = 1.0;
+  });
+
+  // env override
+  if (fromEnv) {
+    Object.entries(fromEnv).forEach(([k, v]) => {
+      weights[k] = v;
+    });
+  }
+
+  // criteria override (highest priority)
+  if (fromCriteria) {
+    Object.entries(fromCriteria).forEach(([k, v]) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return;
+      weights[k] = Math.max(0, Math.min(2, n));
+    });
+  }
+
+  return weights;
+}
+
+function applyProviderWeighting(leads, weights) {
+  const ranked = (Array.isArray(leads) ? leads : []).map(l => {
+    const provider = l && l.provider ? l.provider : null;
+    const w =
+      provider && weights && Object.prototype.hasOwnProperty.call(weights, provider)
+        ? Number(weights[provider])
+        : 1.0;
+
+    const base =
+      Number.isFinite(Number(l && l.source_confidence))
+        ? Number(l.source_confidence)
+        : 60;
+
+    const finalScore = Math.max(0, Math.min(100, Math.round(base * w)));
+
+    return {
+      ...l,
+      weight_used: w,
+      final_score: finalScore,
+    };
+  });
+
+  ranked.sort((a, b) => {
+    const as = Number.isFinite(Number(a.final_score)) ? Number(a.final_score) : 0;
+    const bs = Number.isFinite(Number(b.final_score)) ? Number(b.final_score) : 0;
+    if (bs !== as) return bs - as;
+
+    const ar = Number.isFinite(Number(a.rating)) ? Number(a.rating) : 0;
+    const br = Number.isFinite(Number(b.rating)) ? Number(b.rating) : 0;
+    if (br !== ar) return br - ar;
+
+    const av = Number.isFinite(Number(a.user_ratings_total)) ? Number(a.user_ratings_total) : 0;
+    const bv = Number.isFinite(Number(b.user_ratings_total)) ? Number(b.user_ratings_total) : 0;
+    if (bv !== av) return bv - av;
+
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+
+  return ranked;
 }
 
 function validateDiscoveryPayload(payload) {
@@ -246,6 +366,10 @@ function createDiscoveryJob(payload) {
     maxResults,
     channels,
     notes,
+    providerWeights,
+    parallel,
+    bypassRateLimit,
+    forceRefresh,
   } = payload || {};
 
   const id = uuidv4();
@@ -267,6 +391,13 @@ function createDiscoveryJob(payload) {
           ? channels
           : ['google_places'],
       notes: notes || null,
+      providerWeights:
+        providerWeights && typeof providerWeights === 'object'
+          ? providerWeights
+          : null,
+      parallel: typeof parallel === 'boolean' ? parallel : true,
+      bypassRateLimit: typeof bypassRateLimit === 'boolean' ? bypassRateLimit : false,
+      forceRefresh: typeof forceRefresh === 'boolean' ? forceRefresh : false,
     },
     status: 'queued',
     progress: {
@@ -337,6 +468,155 @@ function markJobFailed(job, error) {
   logJobEvent(job.id, 'FAILED', {
     error: job.error,
   });
+}
+
+/**
+ * FAZ 2.C.2 — Multi-provider duplicate merge helpers
+ */
+function normalizeText(v) {
+  if (!v) return '';
+  return String(v)
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractDomain(v) {
+  if (!v) return null;
+  try {
+    const s = String(v).trim();
+    const url = s.startsWith('http') ? new URL(s) : new URL(`https://${s}`);
+    return normalizeText(url.hostname.replace(/^www\./, ''));
+  } catch {
+    const s = normalizeText(v);
+    return s || null;
+  }
+}
+
+function buildMergeKey(lead) {
+  const name = normalizeText(lead && lead.name);
+  const city = normalizeText(lead && lead.city);
+  const country = normalizeText(lead && lead.country);
+  const addr = normalizeText(lead && lead.address).slice(0, 64);
+  const domain =
+    extractDomain(lead && lead.website) ||
+    extractDomain(lead && lead.url) ||
+    extractDomain(lead && lead.raw && lead.raw.url) ||
+    null;
+
+  if (domain) return `${domain}::${city || country}`;
+  if (name && addr) return `${name}::${city || country}::${addr}`;
+  if (name) return `${name}::${city || country}`;
+  return null;
+}
+
+function mergeGroup(group) {
+  const sources = group.map((g) => ({
+    provider: g.provider || null,
+    provider_id:
+      g.provider === 'google_places'
+        ? g.place_id || null
+        : g.provider_id || null,
+  }));
+
+  // Select best primary: by source_confidence, rating, user_ratings_total
+  const primary = [...group].sort((a, b) => {
+    const ac = Number.isFinite(Number(a?.source_confidence)) ? Number(a.source_confidence) : 0;
+    const bc = Number.isFinite(Number(b?.source_confidence)) ? Number(b.source_confidence) : 0;
+    if (bc !== ac) return bc - ac;
+
+    const ar = Number.isFinite(Number(a?.rating)) ? Number(a.rating) : 0;
+    const br = Number.isFinite(Number(b?.rating)) ? Number(b.rating) : 0;
+    if (br !== ar) return br - ar;
+
+    const av = Number.isFinite(Number(a?.user_ratings_total)) ? Number(a.user_ratings_total) : 0;
+    const bv = Number.isFinite(Number(b?.user_ratings_total)) ? Number(b.user_ratings_total) : 0;
+    return bv - av;
+  })[0] || {};
+
+  const bestRating = group.reduce((max, g) => {
+    const r = typeof g.rating === 'number' ? g.rating : null;
+    if (r == null) return max;
+    if (max == null) return r;
+    return Math.max(max, r);
+  }, null);
+
+  const bestReviews = group.reduce((max, g) => {
+    const r = typeof g.user_ratings_total === 'number' ? g.user_ratings_total : null;
+    if (r == null) return max;
+    if (max == null) return r;
+    return Math.max(max, r);
+  }, null);
+
+  // Compute merged confidence and provider count
+  const bestConfidence = group.reduce((max, g) => {
+    const c = Number.isFinite(Number(g?.source_confidence)) ? Number(g.source_confidence) : null;
+    if (c == null) return max;
+    if (max == null) return c;
+    return Math.max(max, c);
+  }, null);
+
+  // Cross-source bonus: if the same entity appears in multiple providers, boost slightly (cap 100)
+  const providerCount = new Set(group.map((g) => g && g.provider).filter(Boolean)).size;
+  const crossSourceBonus = providerCount >= 2 ? 5 : 0;
+
+  const mergedConfidence = Math.max(
+    0,
+    Math.min(100, Math.round((bestConfidence != null ? bestConfidence : 60) + crossSourceBonus)),
+  );
+
+  const merged = {
+    ...primary,
+    rating: bestRating != null ? bestRating : primary.rating,
+    user_ratings_total: bestReviews != null ? bestReviews : primary.user_ratings_total,
+    source_confidence: mergedConfidence,
+    provider_count: providerCount,
+    sources,
+    raw_sources: group,
+  };
+
+  return merged;
+}
+
+function mergeMultiProviderLeads(rawLeads) {
+  const merged = [];
+  const groups = new Map();
+
+  for (const lead of rawLeads) {
+    if (!lead) continue;
+    const key = buildMergeKey(lead);
+    if (!key) {
+      merged.push({
+        ...lead,
+        source_confidence: Number.isFinite(Number(lead?.source_confidence))
+          ? Number(lead.source_confidence)
+          : 60,
+        sources: [
+          {
+            provider: lead.provider || null,
+            provider_id:
+              lead.provider === 'google_places'
+                ? lead.place_id || null
+                : lead.provider_id || null,
+          },
+        ],
+        raw_sources: [lead],
+      });
+      continue;
+    }
+
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(lead);
+  }
+
+  for (const [, group] of groups) {
+    merged.push(mergeGroup(group));
+  }
+
+  return merged;
 }
 
 /**
@@ -555,21 +835,281 @@ async function runGooglePlacesDiscovery(criteria, jobForLogging) {
  */
 async function runDiscoveryJobLive(job) {
   const { criteria } = job;
+  // Progress heartbeat: provider_search start
+  job.progress = job.progress || { percent: 0, found_leads: 0, enriched_leads: 0 };
+  job.progress.percent = 15;
+  job.updated_at = new Date().toISOString();
+  jobs.set(job.id, job);
+  updateJob(job);
+  logJobEvent(job.id, 'STAGE', {
+    stage: 'provider_search',
+    percent: job.progress.percent,
+    message: 'Provider discovery başlatıldı.',
+  });
 
   // Faz 2: Tüm provider'ları tek yerden yöneten runner
-  const discoveryResult = await runDiscoveryProviders(criteria);
+  const discoveryResult = await runDiscoveryProviders({
+    ...criteria,
+    jobId: job.id,
+  });
 
-  const allLeads = Array.isArray(discoveryResult.leads)
+  // Provider skip / rate limit observability (PAL)
+  if (discoveryResult && typeof discoveryResult === 'object') {
+    const skipped = Array.isArray(discoveryResult.provider_skips)
+      ? discoveryResult.provider_skips
+      : [];
+
+    const skipDetails =
+      discoveryResult.provider_skip_details &&
+      typeof discoveryResult.provider_skip_details === 'object'
+        ? discoveryResult.provider_skip_details
+        : null;
+
+    if (skipped.length > 0) {
+      logJobEvent(job.id, 'PROVIDER_SKIPPED', {
+        stage: 'provider_search',
+        providers: skipped,
+        details: skipDetails,
+      });
+    }
+  }
+
+  // Progress heartbeat: provider_search done
+  job.progress = job.progress || { percent: 0, found_leads: 0, enriched_leads: 0 };
+  job.progress.percent = 55;
+  job.updated_at = new Date().toISOString();
+  jobs.set(job.id, job);
+  updateJob(job);
+  logJobEvent(job.id, 'STAGE', {
+    stage: 'provider_search_done',
+    percent: job.progress.percent,
+    message: 'Provider discovery tamamlandı.',
+  });
+
+  const rawLeads = Array.isArray(discoveryResult.leads)
     ? discoveryResult.leads
     : [];
 
-  const foundLeads = allLeads.length;
-  const enrichedLeads = Math.round(foundLeads * 0.7);
+  const allLeads = mergeMultiProviderLeads(rawLeads);
 
+  // FAZ 2.C.4 — Provider Bazlı Weighting (Lead Ranking v1)
   // providers_used
   const providersUsed = Array.isArray(discoveryResult.providers_used)
     ? discoveryResult.providers_used
     : [];
+  const weightsUsed = resolveProviderWeights(criteria, providersUsed);
+  const rankedLeads = applyProviderWeighting(allLeads, weightsUsed);
+
+  //
+  // FAZ 2.B.6 — DEDUP + PERSIST (canonical: provider + provider_id)
+  // FAZ 2.B.6.2 — Freshness Window & Skip-Enrichment Policy (metrics-only)
+  //
+  const windowMs = FRESHNESS_WINDOW_HOURS * 60 * 60 * 1000;
+  const forceRefresh = Boolean(criteria && criteria.forceRefresh);
+
+  let dedupedCount = 0;
+  let freshInsertedCount = 0;
+
+  let skippedAsFreshCount = 0;
+  let refreshedDueToForceCount = 0;
+  let updatedKnownLeadsCount = 0;
+
+  let deepEnrichmentCandidates = 0;
+  const deepEnrichmentCandidateIds = [];
+
+  for (const lead of allLeads) {
+    if (!lead || !lead.provider) continue;
+
+    // provider_id mapping (google_places → place_id)
+    const providerId =
+      lead.provider === 'google_places'
+        ? lead.place_id
+        : lead.provider_id;
+
+    if (!providerId) continue;
+
+    const result = upsertPotentialLead({
+      provider: lead.provider,
+      provider_id: providerId,
+      name: lead.name || null,
+      category:
+        Array.isArray(lead.types) && lead.types.length > 0
+          ? lead.types[0]
+          : null,
+      city: lead.city || null,
+      raw_payload: lead,
+    });
+
+    if (result.deduped) {
+      dedupedCount += 1;
+      updatedKnownLeadsCount += 1;
+
+      const lastSeenBefore = result.last_seen_at_before;
+      const isFresh =
+        lastSeenBefore && Number.isFinite(Date.parse(lastSeenBefore))
+          ? Date.now() - Date.parse(lastSeenBefore) <= windowMs
+          : false;
+
+      if (isFresh && !forceRefresh) {
+        skippedAsFreshCount += 1;
+        logJobEvent(job.id, 'ENRICHMENT_SKIPPED', {
+          reason: 'freshness_window',
+          provider: lead.provider,
+          provider_id: providerId,
+          last_seen_at_before: lastSeenBefore,
+          window_hours: FRESHNESS_WINDOW_HOURS,
+        });
+      } else if (isFresh && forceRefresh) {
+        refreshedDueToForceCount += 1;
+        logJobEvent(job.id, 'FORCE_REFRESH', {
+          provider: lead.provider,
+          provider_id: providerId,
+          last_seen_at_before: lastSeenBefore,
+          window_hours: FRESHNESS_WINDOW_HOURS,
+        });
+      }
+
+      // FAZ 2.D Deep Enrichment gating: deduped branch
+      if (ENABLE_DEEP_ENRICHMENT) {
+        const eligible = !isFresh || forceRefresh;
+        if (eligible) {
+          deepEnrichmentCandidates += 1;
+
+          if (
+            COLLECT_DEEP_ENRICHMENT_IDS &&
+            deepEnrichmentCandidateIds.length < DEEP_ENRICHMENT_IDS_CAP
+          ) {
+            deepEnrichmentCandidateIds.push(providerId);
+          }
+        }
+      }
+
+      logJobEvent(job.id, 'DEDUP_SKIP', {
+        provider: lead.provider,
+        provider_id: providerId,
+      });
+    } else {
+      freshInsertedCount += 1;
+      logJobEvent(job.id, 'FRESH_LEAD', {
+        provider: lead.provider,
+        provider_id: providerId,
+      });
+      // FAZ 2.D Deep Enrichment gating: fresh insert branch
+      if (ENABLE_DEEP_ENRICHMENT) {
+        deepEnrichmentCandidates += 1;
+
+        if (
+          COLLECT_DEEP_ENRICHMENT_IDS &&
+          deepEnrichmentCandidateIds.length < DEEP_ENRICHMENT_IDS_CAP
+        ) {
+          deepEnrichmentCandidateIds.push(providerId);
+        }
+      }
+    }
+  }
+  logJobEvent(job.id, 'DEDUP_DONE', {
+    found_leads: allLeads.length,
+    raw_leads_count: rawLeads.length,
+    merged_leads_count: allLeads.length,
+    deduped_leads: dedupedCount,
+    fresh_inserted_leads: freshInsertedCount,
+    updated_known_leads_count: updatedKnownLeadsCount,
+    skipped_as_fresh_count: skippedAsFreshCount,
+    refreshed_due_to_force_count: refreshedDueToForceCount,
+    window_hours: FRESHNESS_WINDOW_HOURS,
+    force_refresh: forceRefresh,
+    deep_enrichment_enabled: ENABLE_DEEP_ENRICHMENT,
+    deep_enrichment_candidates: deepEnrichmentCandidates,
+  });
+
+  //
+  // FAZ 2.B.6.3 — Enrichment Gating (Skip-Enrichment Execution)
+  //
+  const shouldSkipEnrichment =
+    skippedAsFreshCount > 0 && !forceRefresh;
+
+  if (shouldSkipEnrichment) {
+    logJobEvent(job.id, 'ENRICHMENT_SKIPPED', {
+      reason: 'freshness_window',
+      skipped_count: skippedAsFreshCount,
+      window_hours: FRESHNESS_WINDOW_HOURS,
+    });
+
+    console.log(
+      '[GODMODE][ENRICHMENT_SKIPPED]',
+      'job=',
+      job.id,
+      'skipped_count=',
+      skippedAsFreshCount,
+    );
+  } else {
+    logJobEvent(job.id, 'ENRICHMENT_START', {
+      reason: forceRefresh ? 'force_refresh' : 'normal',
+    });
+
+    console.log(
+      '[GODMODE][WORKER_TRIGGER] dataFeederWorker triggered for job',
+      job.id,
+    );
+  }
+
+  // FAZ 2.D Deep Enrichment observability + queue persistence (no external calls)
+  if (ENABLE_DEEP_ENRICHMENT) {
+    logJobEvent(job.id, 'DEEP_ENRICHMENT_CANDIDATES', {
+      enabled: true,
+      candidates: deepEnrichmentCandidates,
+      sources: DEEP_ENRICHMENT_SOURCES,
+      skipped_due_to_freshness: shouldSkipEnrichment,
+      force_refresh: forceRefresh,
+      collected_ids: COLLECT_DEEP_ENRICHMENT_IDS,
+      collected_ids_count: deepEnrichmentCandidateIds.length,
+    });
+
+    if (!shouldSkipEnrichment && deepEnrichmentCandidates > 0) {
+      console.log(
+        '[GODMODE][DEEP_ENRICHMENT_READY]',
+        'job=',
+        job.id,
+        'candidates=',
+        deepEnrichmentCandidates,
+        'sources=',
+        DEEP_ENRICHMENT_SOURCES.join(','),
+      );
+    }
+
+    if (
+      !shouldSkipEnrichment &&
+      deepEnrichmentCandidateIds.length > 0 &&
+      typeof enqueueDeepEnrichmentCandidates === 'function'
+    ) {
+      appendDeepEnrichmentStage(job.id, 'QUEUED', {
+        enabled: true,
+        sources: DEEP_ENRICHMENT_SOURCES,
+        candidates: deepEnrichmentCandidates,
+        queued_ids: deepEnrichmentCandidateIds.length,
+        chunk_size: DEEP_ENRICHMENT_QUEUE_CHUNK,
+        cap: DEEP_ENRICHMENT_IDS_CAP,
+      });
+
+      const q = enqueueDeepEnrichmentCandidates(
+        job.id,
+        deepEnrichmentCandidateIds,
+        DEEP_ENRICHMENT_SOURCES,
+        {
+          chunk_size: DEEP_ENRICHMENT_QUEUE_CHUNK,
+          cap: DEEP_ENRICHMENT_IDS_CAP,
+        },
+      );
+
+      logJobEvent(job.id, 'DEEP_ENRICHMENT_QUEUED', {
+        queued: q && typeof q === 'object' ? q.queued : null,
+        batches: q && typeof q === 'object' ? q.batches : null,
+      });
+    }
+  }
+
+  const foundLeads = allLeads.length;
+  const enrichedLeads = Math.round(foundLeads * 0.7);
 
   // criteria.categories fallback
   const criteriaCategories = Array.isArray(criteria.categories)
@@ -589,6 +1129,18 @@ async function runDiscoveryJobLive(job) {
     ? discoveryResult.provider_errors
     : [];
 
+  // Progress heartbeat: result_build start
+  job.progress = job.progress || { percent: 0, found_leads: 0, enriched_leads: 0 };
+  job.progress.percent = 85;
+  job.updated_at = new Date().toISOString();
+  jobs.set(job.id, job);
+  updateJob(job);
+  logJobEvent(job.id, 'STAGE', {
+    stage: 'result_build',
+    percent: job.progress.percent,
+    message: 'Result summary hazırlanıyor.',
+  });
+
   job.progress = {
     percent: 100,
     found_leads: foundLeads,
@@ -603,13 +1155,46 @@ async function runDiscoveryJobLive(job) {
     providers_used: providersUsed,
     used_categories: usedCategories,
     provider_errors: providerErrors,
+    provider_skips: Array.isArray(discoveryResult.provider_skips)
+      ? discoveryResult.provider_skips
+      : [],
+    provider_skip_details:
+      discoveryResult.provider_skip_details &&
+      typeof discoveryResult.provider_skip_details === 'object'
+        ? discoveryResult.provider_skip_details
+        : {},
+    // FAZ 2.D: deep_enrichment result_summary field
+    deep_enrichment: {
+      enabled: ENABLE_DEEP_ENRICHMENT,
+      sources: DEEP_ENRICHMENT_SOURCES,
+      candidates: deepEnrichmentCandidates,
+      collected_ids: COLLECT_DEEP_ENRICHMENT_IDS,
+      collected_ids_count: deepEnrichmentCandidateIds.length,
+    },
+    weights_used: weightsUsed,
+    top_ranked_sample: rankedLeads.slice(0, 20),
     stats: {
       found_leads: foundLeads,
+      raw_leads_count: rawLeads.length,
+      merged_leads_count: allLeads.length,
       enriched_leads: enrichedLeads,
       providers_used: providersUsed,
+      weights_used: weightsUsed,
       used_categories: usedCategories,
+      deduped_leads: dedupedCount,
+      fresh_inserted_leads: freshInsertedCount,
+
+      freshness_window_hours: FRESHNESS_WINDOW_HOURS,
+      force_refresh: forceRefresh,
+      updated_known_leads_count: updatedKnownLeadsCount,
+      skipped_as_fresh_count: skippedAsFreshCount,
+      refreshed_due_to_force_count: refreshedDueToForceCount,
+      // FAZ 2.D: deep_enrichment stats
+      deep_enrichment_enabled: ENABLE_DEEP_ENRICHMENT,
+      deep_enrichment_candidates: deepEnrichmentCandidates,
     },
     sample_leads: allLeads.slice(0, 20),
+    raw_leads_sample: rawLeads.slice(0, 20),
   };
 }
 
@@ -675,6 +1260,16 @@ async function runDiscoveryJob(jobId) {
         rs.provider_errors = [];
       }
 
+      // provider_skips
+      if (!Array.isArray(rs.provider_skips)) {
+        rs.provider_skips = [];
+      }
+
+      // provider_skip_details
+      if (!rs.provider_skip_details || typeof rs.provider_skip_details !== 'object') {
+        rs.provider_skip_details = {};
+      }
+
       // stats.providers_used içinde de eşitle
       if (!Array.isArray(rs.stats.providers_used)) {
         rs.stats.providers_used = rs.providers_used;
@@ -709,6 +1304,7 @@ async function runJob(jobId) {
 module.exports = {
   // status & listing
   getStatus,
+  getProvidersHealth,
   listJobs,
   getJob,
   getJobById, // <-- EKLENDİ

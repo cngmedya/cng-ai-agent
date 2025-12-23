@@ -40,8 +40,70 @@ function initSchema(dbInstance) {
       created_at TEXT,      -- ISO string
       ai_category TEXT,     -- AI'nin atadığı kategori (opsiyonel)
       ai_score INTEGER,     -- 0–100 potansiyel skoru
-      ai_notes TEXT         -- kısa AI notu / etiketler
+      ai_notes TEXT,        -- kısa AI notu / etiketler
+      provider TEXT,
+      provider_id TEXT,
+      raw_payload_json TEXT,
+      first_seen_at TEXT,
+      last_seen_at TEXT,
+      scan_count INTEGER DEFAULT 1,
+      updated_at TEXT,
+      skip_enrichment INTEGER DEFAULT 0
     );
+  `);
+
+  // Godmode FAZ 2.B.6 — potential_leads dedup & freshness columns (idempotent)
+  const leadCols = dbInstance
+    .prepare(`PRAGMA table_info(potential_leads)`)
+    .all()
+    .map((c) => c.name);
+
+  if (!leadCols.includes('provider')) {
+    dbInstance.exec(`ALTER TABLE potential_leads ADD COLUMN provider TEXT;`);
+  }
+  if (!leadCols.includes('provider_id')) {
+    dbInstance.exec(`ALTER TABLE potential_leads ADD COLUMN provider_id TEXT;`);
+  }
+  if (!leadCols.includes('raw_payload_json')) {
+    dbInstance.exec(`ALTER TABLE potential_leads ADD COLUMN raw_payload_json TEXT;`);
+  }
+  if (!leadCols.includes('first_seen_at')) {
+    dbInstance.exec(`ALTER TABLE potential_leads ADD COLUMN first_seen_at TEXT;`);
+  }
+  if (!leadCols.includes('last_seen_at')) {
+    dbInstance.exec(`ALTER TABLE potential_leads ADD COLUMN last_seen_at TEXT;`);
+  }
+  if (!leadCols.includes('scan_count')) {
+    dbInstance.exec(`ALTER TABLE potential_leads ADD COLUMN scan_count INTEGER DEFAULT 1;`);
+  }
+  if (!leadCols.includes('updated_at')) {
+    dbInstance.exec(`ALTER TABLE potential_leads ADD COLUMN updated_at TEXT;`);
+  }
+
+  if (!leadCols.includes('skip_enrichment')) {
+    dbInstance.exec(
+      `ALTER TABLE potential_leads ADD COLUMN skip_enrichment INTEGER DEFAULT 0;`,
+    );
+  }
+
+  dbInstance.exec(`
+    CREATE INDEX IF NOT EXISTS idx_potential_leads_skip_enrichment
+    ON potential_leads (skip_enrichment);
+  `);
+
+  dbInstance.exec(`
+    CREATE INDEX IF NOT EXISTS idx_potential_leads_provider_provider_id
+    ON potential_leads (provider, provider_id);
+  `);
+
+  // Backfill canonical dedup keys from legacy columns (safe to re-run)
+  dbInstance.exec(`
+    UPDATE potential_leads
+    SET
+      provider    = COALESCE(provider, source, 'google_places'),
+      provider_id = COALESCE(provider_id, google_place_id)
+    WHERE provider IS NULL
+       OR provider_id IS NULL;
   `);
 
   // CIR / intel raporları
@@ -181,7 +243,7 @@ function initSchema(dbInstance) {
 
 function getDb() {
   if (!db) {
-    const dbPath = path.join(__dirname, '..', 'data', 'app.sqlite'); // eski DB ile aynı
+    const dbPath = path.join(__dirname, '..', '..', 'data', 'app.sqlite');
     db = new Database(dbPath);
     initSchema(db);
   }

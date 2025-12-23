@@ -1,6 +1,13 @@
-🔥 GÜNCEL — CHANGELOG.md (v1.4.0)
+🔥 GÜNCEL — CHANGELOG.md (v1.4.1)
 
 CHANGELOG – Research Module (CIR)
+
+[1.4.1] – 2025-12-23
+	•	CIR full-report smoke test stabilizasyonu yapıldı
+	•	DB ve migration uyumsuzlukları giderildi
+	•	CIR üretimi idempotent davranacak şekilde sağlamlaştırıldı
+	•	Hatalı CIR üretiminde outreach tetiklenmesi engellendi
+	•	Research → Outreach veri akışı production-safe hale getirildi
 
 [1.4.0] – 2025-12-05
 	•	CIR Output Standardization Engine eklendi:
@@ -35,4 +42,3 @@ CHANGELOG – Research Module (CIR)
 
 [1.0.0] – 2025-12-03
 	•	Temel CIR pipeline kuruldu
-

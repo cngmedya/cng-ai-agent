@@ -14,7 +14,7 @@ const path = require('path');
 
 console.log("\n[migrate:cirsupport] Migration başladı...\n");
 
-const dbPath = path.join(__dirname, '../..', 'src/data/crm.sqlite');
+const dbPath = path.join(__dirname, '../..', 'data/crm.sqlite');
 
 let db;
 try {

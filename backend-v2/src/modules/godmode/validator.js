@@ -32,6 +32,59 @@ function ensureStringArray(arr, fieldName, issues) {
   return cleaned;
 }
 
+function clampNumber(n, min, max) {
+  if (!Number.isFinite(Number(n))) return null;
+  const v = Number(n);
+  return Math.max(min, Math.min(max, v));
+}
+
+function parseProviderWeights(input, issues) {
+  if (typeof input === 'undefined' || input === null) return null;
+
+  const out = {};
+
+  // Accept object map: { google_places: 1.0, yelp: 0.9 }
+  if (typeof input === 'object' && !Array.isArray(input)) {
+    for (const [k, v] of Object.entries(input)) {
+      const key = typeof k === 'string' ? k.trim() : String(k || '');
+      if (!key) continue;
+
+      const w = clampNumber(v, 0, 2);
+      if (w === null) {
+        issues.push({ field: 'providerWeights', message: `Invalid weight for ${key}` });
+        continue;
+      }
+
+      out[key] = w;
+    }
+
+    return Object.keys(out).length ? out : null;
+  }
+
+  // Accept string: "google_places=1.0,yelp=0.9"
+  if (typeof input === 'string') {
+    const parts = input.split(',').map(s => s.trim()).filter(Boolean);
+
+    for (const p of parts) {
+      const [kRaw, vRaw] = p.split('=').map(s => (s || '').trim());
+      if (!kRaw) continue;
+
+      const w = clampNumber(vRaw, 0, 2);
+      if (w === null) {
+        issues.push({ field: 'providerWeights', message: `Invalid weight for ${kRaw}` });
+        continue;
+      }
+
+      out[kRaw] = w;
+    }
+
+    return Object.keys(out).length ? out : null;
+  }
+
+  issues.push({ field: 'providerWeights', message: 'providerWeights must be an object map or a "k=v,k=v" string' });
+  return null;
+}
+
 function validateDiscoveryPayload(payload) {
   const issues = [];
 
@@ -40,8 +93,13 @@ function validateDiscoveryPayload(payload) {
     throw new ValidationError('Discovery job validation failed', issues);
   }
 
-  const city = isNonEmptyString(payload.city) ? payload.city.trim() : null;
-  const country = isNonEmptyString(payload.country) ? payload.country.trim() : null;
+  const src =
+    payload.criteria && typeof payload.criteria === 'object' && !Array.isArray(payload.criteria)
+      ? payload.criteria
+      : payload;
+
+  const city = isNonEmptyString(src.city) ? src.city.trim() : null;
+  const country = isNonEmptyString(src.country) ? src.country.trim() : null;
 
   if (!city) {
     issues.push({ field: 'city', message: 'city is required' });
@@ -51,17 +109,17 @@ function validateDiscoveryPayload(payload) {
   }
 
   let categories = [];
-  if (Array.isArray(payload.categories)) {
-    categories = payload.categories
+  if (Array.isArray(src.categories)) {
+    categories = src.categories
       .map(v => (typeof v === 'string' ? v.trim() : String(v || '')))
       .filter(v => v.length > 0);
-  } else if (typeof payload.categories === 'undefined') {
+  } else if (typeof src.categories === 'undefined') {
     categories = [];
   } else {
     issues.push({ field: 'categories', message: 'categories must be an array of strings' });
   }
 
-  let minGoogleRating = typeof payload.minGoogleRating === 'number' ? payload.minGoogleRating : 0;
+  let minGoogleRating = typeof src.minGoogleRating === 'number' ? src.minGoogleRating : 0;
   if (Number.isNaN(minGoogleRating)) {
     minGoogleRating = 0;
   }
@@ -73,8 +131,8 @@ function validateDiscoveryPayload(payload) {
   }
 
   let maxResults;
-  if (typeof payload.maxResults === 'number' && !Number.isNaN(payload.maxResults)) {
-    maxResults = payload.maxResults;
+  if (typeof src.maxResults === 'number' && !Number.isNaN(src.maxResults)) {
+    maxResults = src.maxResults;
   } else {
     maxResults = MAX_RESULTS_HARD_LIMIT;
   }
@@ -86,17 +144,28 @@ function validateDiscoveryPayload(payload) {
   }
 
   let channels;
-  if (typeof payload.channels === 'undefined') {
+  if (typeof src.channels === 'undefined') {
     channels = ['google_places'];
   } else {
-    channels = ensureStringArray(payload.channels, 'channels', issues);
+    channels = ensureStringArray(src.channels, 'channels', issues);
   }
 
+  const parallel =
+    typeof src.parallel === 'boolean' ? src.parallel : true;
+
+  const bypassRateLimit =
+    typeof src.bypassRateLimit === 'boolean' ? src.bypassRateLimit : false;
+
+  const forceRefresh =
+    typeof src.forceRefresh === 'boolean' ? src.forceRefresh : false;
+
+  const providerWeights = parseProviderWeights(src.providerWeights, issues);
+
   let notes = null;
-  if (typeof payload.notes === 'string') {
-    notes = payload.notes.trim() || null;
-  } else if (typeof payload.notes !== 'undefined' && payload.notes !== null) {
-    notes = String(payload.notes);
+  if (typeof src.notes === 'string') {
+    notes = src.notes.trim() || null;
+  } else if (typeof src.notes !== 'undefined' && src.notes !== null) {
+    notes = String(src.notes);
   }
 
   if (issues.length > 0) {
@@ -110,6 +179,10 @@ function validateDiscoveryPayload(payload) {
     minGoogleRating,
     maxResults,
     channels,
+    parallel,
+    bypassRateLimit,
+    forceRefresh,
+    providerWeights,
     notes,
   };
 }

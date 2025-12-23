@@ -1,7 +1,7 @@
 /**
  * backend-v2/src/jobs/migrateOldLeads.js
- * Eski DB (backend/src/data/crm.sqlite → potential_leads)
- *  -> Yeni DB (backend-v2/src/data/crm.sqlite → potential_leads)
+ * Eski DB (backend/data/crm.sqlite → potential_leads)
+ *  -> Yeni DB (backend-v2/data/crm.sqlite → potential_leads)
  */
 
 const path = require('path');
@@ -12,14 +12,14 @@ console.log("\n[migrate:old-leads] Migration başladı...\n");
 // ✅ Eski DB (backend v1)
 const oldDbPath = path.join(
   __dirname,
-  '../../../backend/src/data/crm.sqlite'
+  '../../../backend/data/crm.sqlite'
 );
 
 // ✅ Yeni DB (backend-v2)
 const newDbPath = path.join(
   __dirname,
   '../..',
-  'src/data/crm.sqlite'
+  'data/crm.sqlite'
 );
 
 console.log("[migrate:old-leads] Eski DB:", oldDbPath);

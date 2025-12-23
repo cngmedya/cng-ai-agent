@@ -53,7 +53,6 @@ function saveCIRToDb(leadId, cir, payload, overallScore) {
  */
 async function generateFullResearch({ leadId }) {
   const startedAt = Date.now();
-  console.log(`[research/full-report] ▶️ STARTED (leadId=${leadId})`);
 
   const lead = getLeadById(leadId);
 
@@ -166,7 +165,14 @@ async function generateFullResearch({ leadId }) {
     )}s, score=${overallScore ?? 'n/a'})`
   );
 
-  return { leadId, leadName: lead.name, cir, raw: payload };
+  return {
+    leadId,
+    leadName: lead.name,
+    cir,
+    cir_score: overallScore,
+    score: overallScore,
+    raw: payload,
+  };
 }
 
 /**

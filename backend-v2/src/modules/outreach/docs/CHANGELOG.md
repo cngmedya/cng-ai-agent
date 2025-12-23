@@ -1,9 +1,16 @@
+# 📌 CHANGELOG.md (v2.1.1)
+
+# OUTREACH MODULE — CHANGELOG
+
 ---
 
-# 📌 CHANGELOG.md (v2.1 FINAL)
-
-```md
-# OUTREACH MODULE — CHANGELOG
+## v2.1.1 — 2025-12-23  
+### 🛠 CIR Alignment & Smoke Test Stabilization
+- Research (CIR) çıktısı **tek referans gerçeklik** olarak zorunlu hale getirildi
+- CIR başarısızsa outreach sequence / first-contact üretimi engellendi
+- Research → Outreach veri akışı production-safe davranışa alındı
+- Smoke test senaryolarında CIR kaynaklı kırılmalar giderildi
+- v2 sequence motoru, normalize CIR olmadan çalışmayacak şekilde güvence altına alındı
 
 ---
 

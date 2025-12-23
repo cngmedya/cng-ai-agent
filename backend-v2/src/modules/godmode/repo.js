@@ -1,3 +1,136 @@
+/**
+ * Potential lead dedup + upsert
+ * Canonical key: provider + provider_id (örn: google_places + place_id)
+ */
+function upsertPotentialLead({
+  provider,
+  provider_id,
+  name,
+  category,
+  city,
+  raw_payload,
+  canonical_key,
+  provider_count,
+  source_confidence,
+  sources,
+}) {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  const existing = db
+    .prepare(
+      `
+      SELECT
+        id,
+        first_seen_at,
+        last_seen_at,
+        scan_count
+      FROM potential_leads
+      WHERE provider = ?
+        AND provider_id = ?
+      LIMIT 1
+    `,
+    )
+    .get(provider, provider_id);
+
+  if (existing) {
+    db.prepare(
+      `
+      UPDATE potential_leads
+      SET
+        last_seen_at     = @last_seen_at,
+        scan_count       = scan_count + 1,
+        raw_payload_json = @raw_payload_json,
+        updated_at       = @updated_at
+      WHERE id = @id
+    `,
+    ).run({
+      id: existing.id,
+      last_seen_at: now,
+      updated_at: now,
+      raw_payload_json: JSON.stringify({
+        ...(raw_payload || {}),
+        _merge: {
+          canonical_key: canonical_key || null,
+          provider_count:
+            typeof provider_count === 'number' ? provider_count : null,
+          source_confidence:
+            typeof source_confidence === 'number' ? source_confidence : null,
+          sources: Array.isArray(sources) ? sources : null,
+        },
+      }),
+    });
+
+    return {
+      id: existing.id,
+      deduped: true,
+      last_seen_at_before: existing.last_seen_at || null,
+      last_seen_at_after: now,
+    };
+  }
+
+  const result = db
+    .prepare(
+      `
+      INSERT INTO potential_leads (
+        provider,
+        provider_id,
+        name,
+        category,
+        city,
+        raw_payload_json,
+        first_seen_at,
+        last_seen_at,
+        scan_count,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        @provider,
+        @provider_id,
+        @name,
+        @category,
+        @city,
+        @raw_payload_json,
+        @first_seen_at,
+        @last_seen_at,
+        @scan_count,
+        @created_at,
+        @updated_at
+      )
+    `,
+    )
+    .run({
+      provider,
+      provider_id,
+      name: name || null,
+      category: category || null,
+      city: city || null,
+      raw_payload_json: JSON.stringify({
+        ...(raw_payload || {}),
+        _merge: {
+          canonical_key: canonical_key || null,
+          provider_count:
+            typeof provider_count === 'number' ? provider_count : null,
+          source_confidence:
+            typeof source_confidence === 'number' ? source_confidence : null,
+          sources: Array.isArray(sources) ? sources : null,
+        },
+      }),
+      first_seen_at: now,
+      last_seen_at: now,
+      scan_count: 1,
+      created_at: now,
+      updated_at: now,
+    });
+
+  return {
+    id: result.lastInsertRowid,
+    deduped: false,
+    last_seen_at_before: null,
+    last_seen_at_after: now,
+  };
+}
 // backend-v2/src/modules/godmode/repo.js
 
 const { getDb } = require('../../core/db');
@@ -306,6 +439,36 @@ function appendJobLog(jobId, eventType, payload) {
 }
 
 /**
+ * Deep Enrichment stage state append
+ */
+function appendDeepEnrichmentStage(jobId, stage, payload) {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  db.prepare(
+    `
+    INSERT INTO godmode_job_logs (
+      job_id,
+      event_type,
+      payload_json,
+      created_at
+    )
+    VALUES (
+      @job_id,
+      @event_type,
+      @payload_json,
+      @created_at
+    )
+  `,
+  ).run({
+    job_id: jobId,
+    event_type: `DEEP_ENRICHMENT_${stage}`,
+    payload_json: payload ? JSON.stringify(payload) : null,
+    created_at: now,
+  });
+}
+
+/**
  * İsteğe bağlı: bir job’ın log geçmişi (debug için)
  */
 function getJobLogs(jobId) {
@@ -328,6 +491,148 @@ function getJobLogs(jobId) {
     .all(jobId);
 }
 
+/**
+ * Read deep enrichment related logs for a job
+ */
+function getDeepEnrichmentLogs(jobId) {
+  const db = getDb();
+
+  return db
+    .prepare(
+      `
+      SELECT
+        id,
+        event_type,
+        payload_json,
+        created_at
+      FROM godmode_job_logs
+      WHERE job_id = ?
+        AND event_type LIKE 'DEEP_ENRICHMENT_%'
+      ORDER BY id ASC
+    `,
+    )
+    .all(jobId);
+}
+
+/**
+ * Persist deep enrichment queue batches as job logs (no new table yet).
+ * This is an infra-safe queue primitive; real execution can later move to a dedicated table + migration.
+ */
+function enqueueDeepEnrichmentCandidates(jobId, candidateIds, sources, opts) {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  const ids = Array.isArray(candidateIds) ? candidateIds : [];
+  const normalized = ids
+    .map((x) => (typeof x === 'string' ? x.trim() : String(x || '')))
+    .filter(Boolean);
+
+  const unique = Array.from(new Set(normalized));
+
+  const chunkSize =
+    opts && typeof opts.chunk_size === 'number' && opts.chunk_size > 0
+      ? Math.floor(opts.chunk_size)
+      : 50;
+
+  const cap =
+    opts && typeof opts.cap === 'number' && opts.cap > 0
+      ? Math.floor(opts.cap)
+      : 5000;
+
+  const finalIds = unique.slice(0, cap);
+
+  if (finalIds.length === 0) {
+    return {
+      queued: 0,
+      batches: 0,
+    };
+  }
+
+  const batchCount = Math.ceil(finalIds.length / chunkSize);
+
+  const insertStmt = db.prepare(
+    `
+    INSERT INTO godmode_job_logs (
+      job_id,
+      event_type,
+      payload_json,
+      created_at
+    )
+    VALUES (
+      @job_id,
+      @event_type,
+      @payload_json,
+      @created_at
+    )
+  `,
+  );
+
+  const tx = db.transaction(() => {
+    for (let i = 0; i < batchCount; i += 1) {
+      const batchIds = finalIds.slice(i * chunkSize, (i + 1) * chunkSize);
+
+      insertStmt.run({
+        job_id: jobId,
+        event_type: 'DEEP_ENRICHMENT_QUEUED',
+        payload_json: JSON.stringify({
+          job_id: jobId,
+          batch_index: i,
+          batch_count: batchCount,
+          ids: batchIds,
+          sources: Array.isArray(sources) ? sources : [],
+          created_at: now,
+        }),
+        created_at: now,
+      });
+    }
+  });
+
+  tx();
+
+  return {
+    queued: finalIds.length,
+    batches: batchCount,
+  };
+}
+
+/**
+ * Convenience reader: queued batches for a job.
+ */
+function getDeepEnrichmentQueuedBatches(jobId) {
+  const db = getDb();
+
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        id,
+        payload_json,
+        created_at
+      FROM godmode_job_logs
+      WHERE job_id = ?
+        AND event_type = 'DEEP_ENRICHMENT_QUEUED'
+      ORDER BY id ASC
+    `,
+    )
+    .all(jobId);
+
+  return rows.map((r) => {
+    try {
+      return {
+        id: r.id,
+        created_at: r.created_at,
+        payload: r.payload_json ? JSON.parse(r.payload_json) : null,
+      };
+    } catch {
+      return {
+        id: r.id,
+        created_at: r.created_at,
+        payload: null,
+      };
+    }
+  });
+}
+
 module.exports = {
   loadAllJobs,
   insertJob,
@@ -335,4 +640,9 @@ module.exports = {
   getJobById,
   appendJobLog,
   getJobLogs,
+  upsertPotentialLead,
+  appendDeepEnrichmentStage,
+  getDeepEnrichmentLogs,
+  enqueueDeepEnrichmentCandidates,
+  getDeepEnrichmentQueuedBatches,
 };

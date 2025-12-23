@@ -1,7 +1,18 @@
-# GODMODE Discovery Engine — ROADMAP (v1.0)
+
+# GODMODE Discovery Engine — ROADMAP (v1.1.2)
+> Current focus: FAZ 2.D.3.2 — SEO signals (indexability/meta/schema)
 
 Bu dosya, CNG AI Agent içerisinde yer alan **GODMODE Discovery Engine** modülünün full gelişim yol haritasıdır.  
 Her aşama production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan maddeler işaretlenerek ilerleme takip edilir.
+
+## Son Oturum Notları (2025-12-23)
+
+- Lokal servis portu standardı: `4000`
+- Smoke test standardı: `./scripts/smoke_test.sh` (major değişiklik sonrası hedef: yeşil)
+- Deep enrichment manuel consumer koştururken `.env` export gerekebilir:
+  - `set -a; source .env; set +a`
+- Deep enrichment’te `WEBSITE_MISSING` event’i gerçek bir senaryodur (Google “OK” dönse bile website alanı boş olabilir).
+- Idempotency aktif: aynı `jobId + google_place_id` için duplicate `TECH_STUB` / `WEBSITE_MISSING` log basılmaz.
 
 ---
 
@@ -180,8 +191,11 @@ Backend restart olsa bile discovery job geçmişi ve sonuçları kaybolmuyor.
   - Farklı payload’larla (`maxResults=50`, `maxResults=100`, `maxResults=500`) İstanbul discovery çalıştırıldı ve job listesi üzerinden doğrulandı.
 - [x] **GODMODE bootstrap logları:**  
   - DB tabloları henüz yokken alınan `no such table` hataları temizlendi; şu an bootstrap aşaması temiz log ile çalışıyor.
-- [x] **DB path standardizasyonu:**  
-  - Tüm GODMODE ve lead/CRM modülleri tek `src/data/app.sqlite` dosyasına taşındı; eski `data/app.sqlite` kaldırılarak legacy kalıntılar temizlendi.
+  - [x] **DB path canonicalizasyonu**
+    - Canonical path: `data/app.sqlite`
+    - Godmode, Discovery, Research ve Lead pipeline aynı DB’yi kullanır
+    - `src/data/` yalnızca legacy/symlink amaçlıdır
+    - Yeni geliştirmelerde `src/data` doğrudan kullanılmaz
 
 ---
 
@@ -277,7 +291,7 @@ Amaç: Her job için adım adım event geçmişi tutmak (debug + izlenebilirlik)
   - [x] Hata durumunda `FAILED` + error payload (ileride genişletmeye uygun)
 - [x] Smoke test:
   - [x] Birden fazla job create + run
-  - [x] `sqlite3 src/data/app.sqlite "SELECT id, job_id, event_type, substr(created_at,1,19) FROM godmode_job_logs ORDER BY id DESC LIMIT 20;"` ile log akışının doğru sırada ve doğru event tipleriyle kaydedildiği doğrulandı.
+  - [x] `sqlite3 data/app.sqlite "SELECT id, job_id, event_type, substr(created_at,1,19) FROM godmode_job_logs ORDER BY id DESC LIMIT 20;"` ile log akışının doğru sırada ve doğru event tipleriyle kaydedildiği doğrulandı.
 
 ---
 
@@ -304,7 +318,8 @@ Amaç: Discovery tamamlandığında ilerideki worker pipeline’larına hook ata
 # FAZ 2 — OMNI-DATA FEEDER (MULTI PROVIDER DISCOVERY ENGINE)
 
 Bu faz ile GODMODE gerçek bir *multi-provider* veri avlama motoruna dönüşür.
-Şu an **v1.1.0-live-faz2** seviyesindeyiz: Google Places provider’ı tam normalize, multi-provider runner hazır, result_summary formatı genişletilmiş durumda.
+
+✅ Smoke test (full-green) doğrulandı (2025-12-23): Godmode + Outreach + Research(CIR full-report) pipeline uçtan uca çalışıyor.
 
 ## **2.A — PROVIDER ABSTRACTION LAYER (PAL)**
 
@@ -320,12 +335,22 @@ Amaç: Tüm discovery provider’larını tek bir abstraction altında toplamak,
     - `used_categories`
     - `provider_errors`
   - Şu an tek aktif kanal: `google_places`
-- [ ] **Provider health check sistemi**
-  - Her provider için basit health endpoint / lightweight check
-  - Admin panel / status endpoint’ine entegre edilecek
-- [ ] **Rate limit balancing**
-  - Provider bazlı rate limit ve backoff stratejisi
-  - Google Places + diğer provider’lar için ortak throttling katmanı
+- [x] **Provider health check sistemi (FAZ 2.A.1 — TAMAMLANDI)**
+  - ✔ Lightweight healthCheck() (google_places)
+  - ✔ Latency ölçümü + ok/fail durumu
+  - ✔ `GET /api/godmode/providers/health` endpoint
+  - ✔ Smoke test entegrasyonu
+  - ✔ PAL observability temeli atıldı
+- [x] **Rate limit & backoff strategy (FAZ 2.A.2 — TAMAMLANDI)**
+  - PAL_FORCE_RATE_LIMIT simülasyonu eklendi (smoke test dahil)
+  - Provider health response: `provider_rate_limited` + `retryAt` + `backoffMs`
+  - Discovery runner `provider_skips` + `provider_skip_details` üretir
+  - Job `result_summary` içine skip detayları yazılır (observability)
+  - Progress heartbeat (stage/percent) iyileştirildi (provider_search → result_build)
+- [ ] **Rate limit balancing (NEXT)**
+  - Provider bazlı gerçek throttling + jitter
+  - Circuit breaker / cooldown window tasarımı
+  - Çoklu provider için ortak backoff policy
 
 ## **2.B — 5+ Discovery Provider Integration**
 
@@ -387,33 +412,160 @@ Her provider için hedef:
 
 Amaç: Aynı firmayı anlamsızca tekrar tekrar keşfetmek yerine, “zaten sistemde olan” lead’ler için daha akıllı bir yol izlemek.
 
-- [ ] `potential_leads` tablosu üzerinden **unique key** (ör: `google_place_id`) ile dedup
-- [ ] Faz 2 hedef davranış:
-  - [ ] Yeni discovery → Eğer lead zaten varsa:
-    - [ ] `last_seen_at` / `last_discovered_at` güncelle
-    - [ ] “freshness window” içindeyse full yeniden enrichment yapma
-  - [ ] “force refresh” parametresi ile manuel yeniden analiz (ör: `forceRefresh: true`)
-- [ ] `result_summary` içine basit dedup metrics:
-  - [ ] `deduped_leads_count`
-  - [ ] `skipped_as_existing_count`
-- [ ] İleride FAZ 3’te Brain tarafına “lead yaşlanma / tazelik” sinyali olarak aktarılacak
+**Canonical dedup key**
+- [x] `provider + provider_id` (örn. `google_places + place_id`) ile dedup
+
+**DB şema hazırlığı (potential_leads)**
+- [x] `provider` / `provider_id` kolonları eklendi
+- [x] `raw_payload_json` kolonları eklendi (ham provider payload saklama)
+- [x] `first_seen_at` / `last_seen_at` kolonları eklendi
+- [x] `scan_count` kolonu eklendi (DEFAULT 1)
+- [x] `updated_at` kolonu eklendi
+- [x] `idx_potential_leads_provider_provider_id` index’i eklendi
+- [x] Startup idempotent schema-sync + best-effort backfill (source/google_place_id → provider/provider_id)
+
+**Godmode discovery davranışı (v1.1.0-live-faz2 mevcut)**
+- [x] Discovery sonuçları `potential_leads` tablosuna upsert ediliyor (idempotent)
+- [x] `result_summary.stats` içine dedup metrikleri eklendi:
+  - [x] `deduped_leads`
+  - [x] `fresh_inserted_leads`
+
+**Kalan tasarım hedefleri (FAZ 2.B.6.2 ile tamamlanacak)**
+- [x] Freshness window içinde **skip-enrichment** (known lead) davranışı (metrik + event düzeyi)
+- [x] `skip_enrichment` kolonu eklendi (DB + startup schema-sync)
+- [x] forceRefresh: true ile manuel yeniden enrichment (DONE — v1.1.2+ hotfix: payload→validator→service→criteria, freshness bypass + metrics)
+- [ ] `last_seen_at` / `scan_count` güncelleme kurallarının netleştirilmesi
+- [ ] `skipped_as_existing_count` gibi ek metriklerin opsiyonel eklenmesi
+
+### 2.B.6.2 — Freshness Window & Skip-Enrichment Policy (DONE — v1.1.1-live-faz2, known-lead path)
+
+Amaç: “Known lead” için gereksiz ağır enrichment/analiz adımlarını çalıştırmadan, sistemin taze kalmasını sağlamak.
+
+**Hedef davranış**
+- [x] Dedup sonrası lead “known” ise:
+  - [x] `last_seen_at` güncelle
+  - [x] `scan_count` +1
+  - [x] Freshness window içindeyse enrichment adımlarını **skip** et
+- [ ] “New lead” davranışı (NEXT — 2.B.6.2.1)
+  - [ ] `first_seen_at` ve `last_seen_at` set et
+  - [ ] `scan_count = 1`
+  - [ ] Normal enrichment akışını çalıştır (mevcut behavior)
+
+**Freshness window tasarımı**
+- [x] Env/flag: `GODMODE_FRESHNESS_WINDOW_HOURS` (default: 168 saat / 7 gün)
+- [x] Lead “fresh” sayılır koşulu:
+  - [x] `now - last_seen_at <= window`
+- [x] forceRefresh: true geldiğinde freshness window bypass edilir (DONE — v1.1.2+ hotfix)
+
+**Observability / metrics**
+- [x] `result_summary.stats` içine:
+  - [x] `skipped_as_fresh_count`
+  - [x] `refreshed_due_to_force_count`
+  - [x] `updated_known_leads_count`
+- [x] Job log’larına (godmode_job_logs) stage/event ekleri:
+  - [x] `DEDUP_DONE`
+  - [ ] `FRESHNESS_EVAL`
+  - [x] `ENRICHMENT_SKIPPED`
+
+**Implementation notes**
+- [x] Karar noktası: `service.runDiscoveryJobLive` içinde dedup sonucu → freshness check (repo last_seen_at_before ile)
+- [x] DB write’lar idempotent (provider+provider_id dedup + upsert + schema-sync)
+- [x] Smoke test metrikleri doğrulayacak şekilde genişletildi (skipped_as_fresh_count, updated_known_leads_count, refreshed_due_to_force_count)
+
+---
+
+### 2.B.6.3 — Enrichment Gating (Skip-Enrichment Execution) (DONE — v1.1.2-live-faz2, freshness gating v1)
+
+Amaç: Freshness window içinde “known lead” için yalnızca lightweight update yapıp, ağır enrichment / worker zincirini gerçekten çalıştırmamak.
+
+**Hedef davranış**
+- [x] `skipped_as_fresh_count` içine giren lead’ler için:
+  - [x] Worker tetikleme / enrichment pipeline adımları gerçekten bypass edilecek
+  - [x] Job log event: `ENRICHMENT_START` eklendi (worker run path)
+  - [ ] `skip_enrichment=1` DB flag’i set edilecek (veya job-context flag)
+- [x] forceRefresh: true senaryosu (DONE — v1.1.2+ hotfix, freshness gating override)
+  - [x] Fresh lead olsa bile enrichment çalışacak
+  - [x] refreshed_due_to_force_count artacak
+
+  - [x] Branch noktası: `runDiscoveryJobLive` → worker orchestration hook (FAZ 1.G.6)
+  - [x] dataFeederWorker tetiklemesi gating ile şartlı hale getirildi (şimdilik console-log stub)
+  - [ ] Job log event: `FRESHNESS_EVAL` (opsiyonel) + `ENRICHMENT_SKIPPED` nedeni standardizasyonu
+  - [ ] `skip_enrichment=1` DB flag’i set etme (NEXT — 2.B.6.3.2)
+
+**Test**
+- [x] Smoke test full-green doğrulandı (PAL + discovery + outreach + CIR)
+- [x] Aynı kriterle ardışık 2 run: ikinci run’da enrichment count düşmeli
+- [ ] Smoke test’e `forceRefresh` senaryosu ekle (NEXT — 2.B.6.3.3)
 
 ---
 
 ## **2.C — Parallel Discovery Engine**
 
-- [ ] Aynı anda çoklu provider taraması (parallel execution)
-- [ ] Duplicate merging system (multi-provider aynı firmayı tek lead’de birleştirme)
-- [ ] Source confidence score
-- [ ] Provider bazlı weighting
+- [x] 2.C.1 — Aynı anda çoklu provider taraması (parallel execution) (v1.2.0-live-faz2)
+  - [x] `providersRunner.runDiscoveryProviders` çoklu provider `channels[]` ile çalışır
+  - [x] `parallel=true` default, `parallel=false` sequential debug modu
+  - [x] `provider_errors` alanı runner output’unda mevcut
+  - [x] Smoke test full-green doğrulandı (Google Places tek provider ile geriye uyum)
 
-## **2.D — Deep Enrichment**
+- [x] 2.C.2 — Duplicate merging system (multi-provider aynı firmayı tek lead’de birleştirme) (DONE — v1.3.0-live-faz2)
+  - [x] Canonical merge key v1: `domain::(city|country)` fallback `normalized_name::(city|country)::address`
+  - [x] Merge strategy v1: primary selection (confidence → rating → review_volume) + `sources[]` + `raw_sources[]`
+  - [x] Merge conflict resolver v1: rating/review_volume seçimi + alan precedence (primary)
+  - [x] Output v1: `result_summary.sample_leads` (merged) + `raw_leads_sample` (ham)
+  - [x] DB persist (şemasız): `raw_payload_json._merge` içine `canonical_key/provider_count/source_confidence/sources` yazılır
 
-- [ ] Website scraping (cheerio)  
-- [ ] Tech stack detection (Wappalyzer Lite)  
-- [ ] SEO signals  
-- [ ] Social presence  
-- [ ] Ad intelligence (Meta Ads / Google Ads tags)  
+- [x] 2.C.3 — Source confidence score (DONE — v1.3.0-live-faz2)
+  - [x] Provider-side confidence v1 (Google Places: rating + review volume + business_status)
+  - [x] Merge-side confidence v1: max(confidence) + cross-source bonus (+5, cap 100)
+  - [x] `provider_count` alanı merged lead üzerinde taşınır
+
+- [x] 2.C.4 — Provider bazlı weighting (DONE — v1.4.0-live-faz2)
+  - [x] `GODMODE_PROVIDER_WEIGHTS` env/config (örn: `google_places=1.0,yelp=0.9,linkedin=0.8`)
+  - [x] Weighted score: `final_score = source_confidence * weight` (cap 100)
+  - [x] Lead ranking: top-N selection + deterministik sıralama (score → rating → reviews)
+  - [x] Observability: `weights_used` + `top_ranked_sample` alanları result_summary’ye eklendi
+  - [x] DB persist: `top_ranked_sample` öncelikli (fallback: `sample_leads`)
+
+
+## **2.D — Deep Enrichment (Website/Tech/SEO/Social signals)**
+
+- [x] 2.D.0 — Gating & Observability (READY — infra)
+  - [x] `GODMODE_DEEP_ENRICHMENT` feature flag + `GODMODE_DEEP_ENRICHMENT_SOURCES`
+  - [x] `deep_enrichment_candidates` metriği (pipeline + worker + service)
+  - [x] `job.result_summary.deep_enrichment` alanı (enabled/sources/candidates)
+
+- [x] 2.D.1 — Stage persistence (READY — infra)
+  - [x] Repo helpers: `appendDeepEnrichmentStage()` + `getDeepEnrichmentLogs()`
+  - [x] Event types: `DEEP_ENRICHMENT_*` (RUNNING/COMPLETED/FAILED)
+
+- [x] 2.D.2 — Placeholder workers (READY — infra, no external calls)
+  - [x] `economicAnalyzerWorker` stage-aware placeholder signals
+  - [x] `entityResolverWorker` stage-aware normalized entity stub
+
+- [ ] 2.D.3 — Real enrichment execution (IN PROGRESS)
+  - [x] 2.D.3.0 — Candidate ID collection + queue persistence (DONE — infra)
+    - [x] Candidate ID collection (cap/opt-in): `GODMODE_DEEP_ENRICHMENT_COLLECT_IDS`, `GODMODE_DEEP_ENRICHMENT_IDS_CAP`
+    - [x] Queue persistence via job logs (no new tables yet):
+      - [x] Repo: `enqueueDeepEnrichmentCandidates()` + `getDeepEnrichmentQueuedBatches()`
+      - [x] Event: `DEEP_ENRICHMENT_QUEUED` batches (chunk size env: `GODMODE_DEEP_ENRICHMENT_QUEUE_CHUNK`)
+    - [x] Service wiring: eligible providerIds collected + queued when not skipped due to freshness
+
+  - [x] 2.D.3.1 — Website fetch + tech fingerprint (DONE — v1.1.2+ hotfix, rate-limit safe)
+  - [x] Job logs API endpoints eklendi:
+    - `GET /api/godmode/jobs/:id/logs`
+    - `GET /api/godmode/jobs/:id/logs/deep-enrichment`
+  - [x] Deep enrichment consumer (manual invoke) eklendi: `processDeepEnrichmentBatch({ jobId, ids, sources })`
+  - [x] Website fallback (Place Details) yalnızca website eksikse çalışır; rate-limit safe backoff ile sarıldı
+  - [x] Observability:
+    - `DEEP_ENRICHMENT_TECH_STUB`
+    - `DEEP_ENRICHMENT_WEBSITE_MISSING` (Google OK ama website yok)
+    - `DEEP_ENRICHMENT_WEBSITE_FETCH_FAILED` (REQUEST_DENIED / MISSING_API_KEY vb.)
+  - [x] Idempotency: Aynı `jobId + google_place_id` için duplicate TECH_STUB / WEBSITE_MISSING log basılmaz
+    - [x] Manuel consumer notu: `node -e ...` çağrılarında `.env` export edilmezse `MISSING_API_KEY/REQUEST_DENIED` görülebilir
+    - [x] “Website yok” senaryosu normaldir; bu durumda `DEEP_ENRICHMENT_WEBSITE_MISSING` log’u ile kanıtlanır
+  - [ ] 2.D.3.2 — SEO signals (NEXT: indexability/meta/schema)
+  - [ ] 2.D.3.3 — Social signals (NEXT: presence + link extraction)
+  - [ ] 2.D.3.4 — Persist enrichment payload to DB (NEXT: schema plan + migration)
 
 ## **2.E — Lead Freshness & Rescan Policy (New vs Known Leads)**
 
@@ -515,3 +667,7 @@ Discovery sonuçlarının otomatik analiz edilmesi.
 - Bu roadmap her sprint sonunda güncellenecektir.  
 - Yeni fazlar eklenebilir.  
 - Öncelik her zaman Faz 1 → Faz 2 şeklinde ilerler.
+
+- DB canonical kuralı:
+  - Kod + doküman + smoke test → `data/` dizinini referans alır
+  - Bu kural FAZ 2 ve sonrası için değişmez kabul edilir

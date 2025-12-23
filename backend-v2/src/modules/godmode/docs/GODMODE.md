@@ -1,4 +1,4 @@
-# GODMODE Discovery Engine — v1.0.0-live
+# GODMODE Discovery Engine — v1.1.2-live
 Next-gen Omni-Data Discovery Pipeline
 
 GODMODE, CNG AI Agent ekosistemi içinde yer alan yüksek kapasiteli tarama, keşif ve zeka toplama motorudur.  
@@ -8,10 +8,10 @@ Faz 2 ile çok sağlayıcılı (multi-provider), paralel çalışan ve AI destek
 ---
 
 # ✔️ **Sürüm Bilgisi**
-- **Version:** `v1.0.0-live`
-- **Release Date:** 2025-12-08
-- **Status:** Production-grade stable (Faz 1 %100 tamamlandı)
-- **Next Target:** Faz 2 — Provider Abstraction Layer + Multi-Provider Discovery
+- **Version:** `v1.1.2-live`
+- **Release Date:** 2025-12-23
+- **Status:** Production-grade stable (Faz 1 tamamlandı, Faz 2 aktif geliştirme)
+- **Next Target:** Faz 2 — Deep Enrichment, Freshness & Multi-Provider Expansion
 
 ---
 
@@ -48,6 +48,9 @@ Her job için adım adım event kaydı tutulur:
 	•	PROVIDER_PAGE
 	•	COMPLETED
 	•	FAILED
+	•	DEEP_ENRICHMENT_TECH_STUB
+	•	DEEP_ENRICHMENT_WEBSITE_MISSING
+	•	DEEP_ENRICHMENT_WEBSITE_FETCH_FAILED
 
 Tablo: godmode_job_logs
 
@@ -137,6 +140,41 @@ Her sayfa:
 
 ⸻
 
+---
+
+# 🧠 Faz 2 — Aktif Özellikler (v1.1.x)
+
+### **8. Freshness & forceRefresh Mekanizması**
+- Lead freshness window ile gereksiz enrichment engellenir
+- `forceRefresh: true` gönderildiğinde:
+  - Fresh lead olsa bile enrichment çalışır
+  - Freshness gating bypass edilir
+  - refresh metriği loglanır
+
+### **9. Deep Enrichment Pipeline**
+- Discovery sonrası manuel veya planlı tetiklenebilir
+- Çalışan enrichment türleri:
+  - Website fetch
+  - Tech fingerprint (stub)
+- Google Place Details fallback:
+  - Website yoksa otomatik denenir
+  - Rate-limit safe (429 kovalanmaz)
+
+### **10. Idempotent Enrichment Execution**
+- Aynı `jobId + google_place_id` için:
+  - Tech stub
+  - Website missing
+  event’leri **sadece bir kez** loglanır
+- Tekrar consumer çalıştırmak güvenlidir
+
+### **11. Gelişmiş İzlenebilirlik (Observability)**
+Yeni event türleri:
+- `DEEP_ENRICHMENT_TECH_STUB`
+- `DEEP_ENRICHMENT_WEBSITE_MISSING`
+- `DEEP_ENRICHMENT_WEBSITE_FETCH_FAILED`
+
+⸻
+
 🌐 API Referansı
 
 GET /api/godmode/status
@@ -180,44 +218,29 @@ Tek job’ın tüm detayları + summary + provider errors + event logs (v2’de 
 
 ⸻
 
-🔧 Environment Variables
+GET /api/godmode/jobs/:id/logs
+→ Job’a ait tüm event log’ları döner
 
-Key
-Açıklama
-GOOGLE_PLACES_API_KEY
-Gerçek discovery için zorunlu
-GODMODE_DISCOVERY_MODE
-mock, live, 0, 1, true
-GODMODE_MAX_RESULTS
-(Opsiyonel) global limit
-
-
-📈 Faz 2 Hazırlık Durumu
-
-Faz 1; Faz 2 için tüm alt yapıyı %100 hazır hale getirmiş durumda:
-	•	Provider abstraction için unified runner
-	•	Error normalization altyapısı
-	•	Worker hook noktası
-	•	Lead storage & duplicate protokolü
-	•	Discovery pipeline izole edildi (kolay genişletilebilir)
-	•	Job state machine tamamen oturdu
-
-Faz 2 ile eklenecek:
-	•	LinkedIn
-	•	Instagram
-	•	Facebook
-	•	Yelp
-	•	MERSİS
-	•	5 parallel provider taraması
-	•	Duplicate merging
-	•	Confidence scoring
-
-🏁 Sonuç
-
-GODMODE Faz 1 → %100 tamamlandı.
-Artık modül tam anlamıyla production-grade, izlenebilir, stabil ve genişlemeye hazır bir discovery engine.
-
-Sonraki aşama:
-Faz 2 — Provider Abstraction Layer (PAL) & Multi-Provider Engine
+GET /api/godmode/jobs/:id/logs/deep-enrichment
+→ Sadece deep enrichment event’lerini döner
 
 ---
+
+## 🔁 Deep Enrichment (Manuel Çalıştırma)
+
+Aynı discovery job’u için deep enrichment consumer’ı manuel tetiklemek mümkündür.
+
+Örnek:
+
+```js
+processDeepEnrichmentBatch({
+  jobId: "<JOB_ID>",
+  ids: ["<GOOGLE_PLACE_ID>", "..."],
+  sources: ["website", "tech"]
+});
+```
+
+Bu işlem:
+- Mevcut discovery sonuçlarını kullanır
+- Yeni provider çağrısı yapmaz (güvenli)
+- Idempotent çalışır

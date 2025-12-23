@@ -25,6 +25,11 @@ if ! command -v $JQ_BIN >/dev/null 2>&1; then
   JQ_BIN="cat"
 fi
 
+CHECK_JQ_BIN=""
+if command -v jq >/dev/null 2>&1; then
+  CHECK_JQ_BIN="jq"
+fi
+
 ###
 # 1) ADMIN STATUS
 ###
@@ -34,9 +39,35 @@ echo "✔ Admin status OK"
 echo
 
 ###
-# 2) GODMODE DISCOVERY ENGINE – BASIC JOB
+# 2) GODMODE – PROVIDER HEALTH (PAL)
 ###
-echo "▶ 2) GODMODE job create + run testi..."
+echo "▶ 2) Godmode provider health testi (PAL)..."
+
+HEALTH_JSON=$(curl -s "$BASE_URL/api/godmode/providers/health")
+echo "$HEALTH_JSON" | $JQ_BIN
+
+if [ "${PAL_FORCE_RATE_LIMIT:-0}" = "1" ]; then
+  PROVIDER_ERR_CODE=$(echo "$HEALTH_JSON" | $JQ_BIN -r '.data.providers.google_places.error.code // empty')
+  if [ "$PROVIDER_ERR_CODE" != "provider_rate_limited" ]; then
+    echo "[ERR] Godmode provider health FAILED (expected provider_rate_limited simulation)"
+    exit 1
+  fi
+  echo "✔ Godmode provider health OK (rate-limit simulation)"
+  echo
+else
+  PROVIDER_OK=$(echo "$HEALTH_JSON" | $JQ_BIN -r '.data.providers.google_places.ok')
+  if [ "$PROVIDER_OK" != "true" ]; then
+    echo "[ERR] Godmode provider health FAILED (google_places.ok != true)"
+    exit 1
+  fi
+  echo "✔ Godmode provider health OK"
+  echo
+fi
+
+###
+# 3) GODMODE DISCOVERY ENGINE – BASIC JOB
+###
+echo "▶ 3) GODMODE job create + run testi..."
 
 JOB_ID=$(curl -s -X POST "$BASE_URL/api/godmode/jobs/discovery-scan" \
   -H "Content-Type: application/json" \
@@ -64,9 +95,9 @@ echo "✔ Godmode discovery pipeline OK"
 echo
 
 ###
-# 3) EMAIL MODULE – TEST LOG
+# 4) EMAIL MODULE – TEST LOG
 ###
-echo "▶ 3) Email test log..."
+echo "▶ 4) Email test log..."
 
 curl -s -X POST "$BASE_URL/api/email/test" \
   -H "Content-Type: application/json" \
@@ -75,9 +106,9 @@ echo "✔ Email module test OK (log yazması gerekiyor)"
 echo
 
 ###
-# 4) WHATSAPP MODULE – TEST LOG
+# 5) WHATSAPP MODULE – TEST LOG
 ###
-echo "▶ 4) WhatsApp test log..."
+echo "▶ 5) WhatsApp test log..."
 
 curl -s -X POST "$BASE_URL/api/whatsapp/test" \
   -H "Content-Type: application/json" \
@@ -86,9 +117,9 @@ echo "✔ WhatsApp module test OK (simulated log)"
 echo
 
 ###
-# 5) OUTREACH v1 – FIRST CONTACT
+# 6) OUTREACH v1 – FIRST CONTACT
 ###
-echo "▶ 5) Outreach v1 – first-contact testi..."
+echo "▶ 6) Outreach v1 – first-contact testi..."
 
 curl -s -X POST "$BASE_URL/api/outreach/first-contact" \
   -H "Content-Type: application/json" \
@@ -103,7 +134,7 @@ echo "✔ Outreach v1 first-contact OK"
 echo
 
 ###
-# 6) LEAD ID GEREKEN TESTLER İÇİN HAZIRLIK
+# 7) LEAD ID GEREKEN TESTLER İÇİN HAZIRLIK
 # Not: Buradaki LEAD_ID'yi kendi veritabanındaki gerçek bir ID ile güncelle.
 ###
 echo "ℹ  Lead bazlı testler için varsayılan LEAD_ID = $LEAD_ID"
@@ -112,11 +143,11 @@ echo '   LEAD_ID_OVERRIDE=123 ./scripts/smoke_test.sh'
 echo
 
 ###
-# 7) OUTREACH v2 – SEQUENCE
+# 8) OUTREACH v2 – SEQUENCE
 ###
-echo "▶ 7) Outreach v2 – multi-step sequence testi (leadId=$LEAD_ID)..."
+echo "▶ 8) Outreach v2 – multi-step sequence testi (leadId=$LEAD_ID)..."
 
-curl -s -X POST "$BASE_URL/api/outreach/sequence/$LEAD_ID" \
+OUTREACH_V2_JSON=$(curl -s -X POST "$BASE_URL/api/outreach/sequence/$LEAD_ID" \
   -H "Content-Type: application/json" \
   -d '{
     "channel": "whatsapp",
@@ -124,14 +155,28 @@ curl -s -X POST "$BASE_URL/api/outreach/sequence/$LEAD_ID" \
     "language": "tr",
     "objective": "ilk_temas",
     "max_followups": 2
-  }' | $JQ_BIN '{lead_id, ai_context, sequence}'
-echo "✔ Outreach v2 sequence OK (eğer lead & intel uygun ise)"
+  }')
+
+echo "$OUTREACH_V2_JSON" | $JQ_BIN '{ok, lead_id: .data.lead_id, ai_context: .data.ai_context, sequence: .data.sequence}'
+
+if [ -n "$CHECK_JQ_BIN" ]; then
+  OUT_V2_LEAD_ID=$(echo "$OUTREACH_V2_JSON" | jq -r '.data.lead_id // empty')
+  OUT_V2_SEQ_LEN=$(echo "$OUTREACH_V2_JSON" | jq -r '(.data.sequence | length) // 0')
+  if [ "$OUT_V2_LEAD_ID" = "" ] || [ "$OUT_V2_LEAD_ID" = "null" ] || [ "$OUT_V2_SEQ_LEN" -lt 1 ]; then
+    echo "[ERR] Outreach v2 sequence FAILED (lead_id veya sequence boş/null)"
+    exit 1
+  fi
+else
+  echo "⚠ jq bulunamadı: Outreach v2 strict assertion atlandı (smoke test false-green olabilir)."
+fi
+
+echo "✔ Outreach v2 sequence OK"
 echo
 
 ###
-# 8) OUTREACH SCHEDULER – ENQUEUE
+# 9) OUTREACH SCHEDULER – ENQUEUE
 ###
-echo "▶ 8) Outreach Scheduler enqueue testi (leadId=$LEAD_ID)..."
+echo "▶ 9) Outreach Scheduler enqueue testi (leadId=$LEAD_ID)..."
 
 curl -s -X POST "$BASE_URL/api/outreach-scheduler/enqueue/$LEAD_ID" \
   -H "Content-Type: application/json" \
@@ -146,24 +191,39 @@ echo "✔ Outreach Scheduler enqueue OK"
 echo
 
 ###
-# 9) RESEARCH – CIR FULL REPORT
+# 10) RESEARCH – CIR FULL REPORT
 ###
-echo "▶ 9) Research / CIR full-report testi (leadId=$LEAD_ID)..."
+echo "▶ 10) Research / CIR full-report testi (leadId=$LEAD_ID)..."
 
-curl -s -X POST "$BASE_URL/api/research/full-report" \
+RESEARCH_CIR_JSON=$(curl -s -X POST "$BASE_URL/api/research/full-report" \
   -H "Content-Type: application/json" \
   -d "{
     \"leadId\": $LEAD_ID
-  }" | $JQ_BIN '{leadId, leadName, cir: .cir.priority_score}'
-echo "✔ Research CIR pipeline OK (lead verisine göre skor dönmeli)"
+  }")
+
+echo "$RESEARCH_CIR_JSON" | $JQ_BIN '{ok, leadId: .data.leadId, leadName: .data.leadName, cir_score: (.data.cir.CNG_Intelligence_Report.priority_score // .priority_score // .data.priority_score)}'
+
+if [ -n "$CHECK_JQ_BIN" ]; then
+  CIR_LEAD_ID=$(echo "$RESEARCH_CIR_JSON" | jq -r '.data.leadId // empty')
+  CIR_SCORE=$(echo "$RESEARCH_CIR_JSON" | jq -r '.data.cir.CNG_Intelligence_Report.priority_score // .priority_score // .data.priority_score // empty')
+  if [ "$CIR_LEAD_ID" = "" ] || [ "$CIR_LEAD_ID" = "null" ] || [ "$CIR_SCORE" = "" ] || [ "$CIR_SCORE" = "null" ]; then
+    echo "[ERR] Research CIR full-report FAILED (leadId veya priority_score boş/null)"
+    exit 1
+  fi
+else
+  echo "⚠ jq bulunamadı: Research CIR strict assertion atlandı (smoke test false-green olabilir)."
+fi
+
+echo "✔ Research CIR pipeline OK"
 echo
 
 ###
-# 10) ÖZET
+# 11) ÖZET
 ###
 echo "==============================="
 echo " SMOKE TEST TAMAMLANDI 🔥"
 echo "  - Admin status"
+echo "  - Godmode provider health (PAL)"
 echo "  - Godmode discovery (job create + run + summary)"
 echo "  - Email log"
 echo "  - WhatsApp log"

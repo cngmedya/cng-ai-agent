@@ -1,18 +1,21 @@
-
 📌 OUTREACH.md (v2.1 FINAL)
 
 — FULL TECHNICAL DOCUMENTATION —
 
 # OUTREACH MODULE — Full Technical Documentation
-**Module Version:** v2.1.0  
-**Last Update:** 2025-12-06  
+**Module Version:** v2.1.1  
+**Last Update:** 2025-12-23  
 **Maintainer:** CNG Medya AI Engineering Team  
-**Status:** Stable — Production Ready
+**Status:** Stable — Production Ready (CIR-aligned)
 
 ---
 
 # 📌 1. Purpose
 Outreach modülü, CNG Medya’nın satış pipeline’ındaki ilk iletişim ve takip süreçlerini otomatikleştiren motorudur.
+
+> **CIR Entegrasyon Notu (2025-12-23):**  
+> Outreach modülü, Research (CIR) çıktısını **tek referans gerçeklik** olarak kullanacak şekilde stabilize edilmiştir.  
+> CIR üretimi başarısız olursa outreach sequence veya first-contact üretimi **tetiklenmez**.
 
 Görevleri:
 
@@ -40,7 +43,8 @@ Görevleri:
   - objective  
   - max_followups  
 - INTEL modülünden gelen SWOT + digital_status + priority_score entegre edilir  
-- Prompt: `outreach_sequence_v2.md` (Universal Voice Edition)
+- Prompt: `outreach_sequence_v2.md` (Universal Voice Edition)  
+- CIR (normalize edilmiş research output) zorunlu girdidir; eksik veya hatalı CIR durumunda v2 sequence üretilmez
 
 ---
 
@@ -92,6 +96,7 @@ Client
 → Service.generateSequenceForLead()
 → repo.getLeadById()
 → intel.analyzeLead()
+→ CIR doğrulama (research output integrity check)
 → promptLoader (outreach_sequence_v2.md)
 → llmClient (strict JSON)
 ← ai_context + sequence[]
@@ -142,6 +147,7 @@ sequence[]
 	•	shared/ai/promptLoader.js
 	•	modules/intel/service.js → analyzeLead()
 	•	core/db.js
+	•	modules/research (CIR normalized output)
 
 ⸻
 
@@ -151,10 +157,14 @@ sequence[]
 	•	WhatsApp Cloud API entegrasyonu
 	•	UI dashboard’a sequence embed
 	•	Sequence archive (DB kayıt sistemi)
+	•	CIR freshness kontrolü ile otomatik re-research tetikleme
 
 ⸻
 
 📌 10. Versioning
 
+v2.1.1 — CIR stabilizasyonu ve smoke test uyumu
+
 Detaylar: CHANGELOG.md
 
+</file>

@@ -1,11 +1,13 @@
-
-
-✅ GÜNCEL — RESEARCH.md (v1.4.0)
+✅ GÜNCEL — RESEARCH.md (v1.4.1)
 
 RESEARCH Module – CNG Intelligence Report (CIR)
 
-Modül Versiyonu: v1.4.0
+Modül Versiyonu: v1.4.1
 Amaç: Tek bir lead için çok kaynaklı istihbaratı (intel_basic, intel_deep, web search, sosyal medya, reklam izi, rakipler, benchmark) birleştirip satış ekibi için CNG Intelligence Report (CIR) üretmek ve rapor geçmişini saklamak.
+
+> **Stabilizasyon Notu (2025-12-23):**
+> CIR full-report hattında smoke test sırasında kırmızıya düşen senaryolar giderildi.
+> DB/migration uyumsuzlukları temizlendi, research → outreach veri akışı stabilize edildi.
 
 ⸻
 
@@ -50,6 +52,7 @@ POST /api/research/full-report
 	•	CIR pipeline çalışır
 	•	DB’ye rapor kaydı yapılır
 	•	last_cir_score + timestamp güncellenir
+	•	Aynı lead için ardışık çağrılar idempotent davranır; yeni CIR yalnızca gerekli olduğunda üretilir
 
 GET /api/research/latest/:leadId
 	•	En son CIR raporunu döner.
@@ -68,6 +71,12 @@ GET /api/research/history/:leadId
 ⸻
 
 3. Alt Modüller (Updated)
+
+### 3.x Pipeline Stabilite & Çalışma Notları
+
+- CIR pipeline smoke test ile doğrulanmıştır.
+- CIR üretimi sırasında oluşan tüm DB yazımları transaction-safe kabul edilir.
+- CIR başarısız olursa outreach tarafına veri akışı tetiklenmez.
 
 3.1. intel_basic
 	•	Fonksiyon: analyzeLead({ leadId })
@@ -162,5 +171,16 @@ Model çıktılarında:
 
 Bu motor researchService.js içinde LLM yanıtı normalize eder.
 
+Bu standart, outreach ve satış modülleri tarafından **tek referans gerçeklik** olarak kabul edilir.
+Downstream modüller (outreach, CRM) ham LLM çıktısını değil, yalnızca normalize edilmiş CIR objesini kullanır.
+
 ⸻
 
+---
+
+### Değişiklik Geçmişi (Özet)
+
+- **v1.4.1 (2025-12-23)**  
+  - CIR full-report smoke test stabilizasyonu  
+  - DB/migration uyumsuzluklarının giderilmesi  
+  - Outreach entegrasyonu için güvenli davranış
