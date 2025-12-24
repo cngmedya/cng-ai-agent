@@ -5,6 +5,8 @@ const {
 
 const { getDb } = require('../../../core/db');
 
+const { extractSeoSignalsFromHtml } = require('../workers/dataFeederWorker');
+
 const PROVIDERS = {
   google_places: {
     id: 'google_places',
@@ -150,6 +152,65 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// 2.D.3.4 — Social signals extraction helper
+function uniq(arr) {
+  return Array.from(new Set((Array.isArray(arr) ? arr : []).filter(Boolean)));
+}
+
+function extractSocialSignalsFromHtml(html) {
+  const text = typeof html === 'string' ? html : '';
+  if (!text) {
+    return {
+      ok: false,
+      reason: 'empty_html',
+      links: {
+        instagram: [],
+        facebook: [],
+        linkedin: [],
+        youtube: [],
+        tiktok: [],
+      },
+      emails: [],
+      phones: [],
+    };
+  }
+
+  const urlMatches = text.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+  const urls = uniq(urlMatches.map((u) => String(u).replace(/&amp;/g, '&')));
+
+  const pick = (pred) => uniq(urls.filter(pred).slice(0, 20));
+
+  const instagram = pick((u) => /instagram\.com\//i.test(u));
+  const facebook = pick((u) => /facebook\.com\//i.test(u));
+  const linkedin = pick((u) => /linkedin\.com\//i.test(u));
+  const youtube = pick((u) => /(youtube\.com\/|youtu\.be\/)/i.test(u));
+  const tiktok = pick((u) => /tiktok\.com\//i.test(u));
+
+  const emailMatches = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+  const emails = uniq(emailMatches.map((e) => e.toLowerCase())).slice(0, 20);
+
+  const telMatches = text.match(/(\+\d{1,3}[\s-]?)?(\(?\d{2,4}\)?[\s-]?)?\d{3,4}[\s-]?\d{2,4}[\s-]?\d{2,4}/g) || [];
+  const phones = uniq(
+    telMatches
+      .map((p) => String(p).replace(/[^\d+]/g, ''))
+      .filter((p) => p.length >= 10 && p.length <= 15),
+  ).slice(0, 20);
+
+  return {
+    ok: true,
+    reason: 'ok',
+    links: {
+      instagram,
+      facebook,
+      linkedin,
+      youtube,
+      tiktok,
+    },
+    emails,
+    phones,
+  };
+}
+
 async function fetchGooglePlaceWebsite(placeId) {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) {
@@ -213,12 +274,80 @@ async function processDeepEnrichmentBatch({ jobId, ids = [], sources = [] }) {
      LIMIT 1`,
   );
 
+  const hasSeoSignalsLogStmt = db.prepare(
+    `SELECT 1 FROM godmode_job_logs
+     WHERE job_id = ? AND event_type = 'DEEP_ENRICHMENT_SEO_SIGNALS'
+       AND json_extract(payload_json, '$.google_place_id') = ?
+     LIMIT 1`,
+  );
+
+  const hasSocialSignalsLogStmt = db.prepare(
+    `SELECT 1 FROM godmode_job_logs
+     WHERE job_id = ? AND event_type = 'DEEP_ENRICHMENT_SOCIAL_SIGNALS'
+       AND json_extract(payload_json, '$.google_place_id') = ?
+     LIMIT 1`,
+  );
+
   const hasWebsiteMissingLogStmt = db.prepare(
     `SELECT 1 FROM godmode_job_logs
      WHERE job_id = ? AND event_type = 'DEEP_ENRICHMENT_WEBSITE_MISSING'
        AND json_extract(payload_json, '$.google_place_id') = ?
      LIMIT 1`,
   );
+
+  const hasOpportunityScoreLogStmt = db.prepare(
+    `SELECT 1 FROM godmode_job_logs
+     WHERE job_id = ? AND event_type = 'DEEP_ENRICHMENT_OPPORTUNITY_SCORE'
+       AND json_extract(payload_json, '$.google_place_id') = ?
+     LIMIT 1`,
+  );
+
+  const readLogRowStmt = db.prepare(
+    `SELECT rowid as row_id, payload_json
+     FROM godmode_job_logs
+     WHERE job_id = ? AND event_type = ?
+       AND json_extract(payload_json, '$.google_place_id') = ?
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+
+  const updateLogRowStmt = db.prepare(
+    `UPDATE godmode_job_logs
+     SET payload_json = ?, created_at = created_at
+     WHERE rowid = ?`,
+  );
+
+  // 2.D.3.3 — Opportunity / Lead Scoring helper
+  function computeOpportunity({ website, seo, tech }) {
+    const websiteMissing = !website;
+
+    const seoOk = seo?.ok === true;
+    const seoOffer = !seoOk;
+
+    const techArr = Array.isArray(tech) ? tech : [];
+    const techModernization = techArr.some((t) =>
+      ['wix', 'webflow', 'shopify', 'wordpress'].includes(String(t || '').toLowerCase()),
+    );
+
+    let score = 0;
+    if (websiteMissing) score += 45;
+    if (seoOffer) score += 30;
+    if (techModernization) score += 15;
+
+    if (score > 100) score = 100;
+    if (score < 0) score = 0;
+
+    const priority = score >= 70 ? 'high' : score >= 40 ? 'medium' : 'low';
+
+    return {
+      website_missing: websiteMissing,
+      website_offer: websiteMissing,
+      seo_offer: seoOffer,
+      tech_modernization_offer: techModernization,
+      score,
+      priority,
+    };
+  }
 
   let processed = 0;
 
@@ -261,9 +390,79 @@ async function processDeepEnrichmentBatch({ jobId, ids = [], sources = [] }) {
                 google_place_id: placeId,
                 status: 'OK',
                 website: null,
+                seo: {
+                  ok: false,
+                  reason: 'website_missing',
+                  indexability: null,
+                  meta: null,
+                  schema: null,
+                },
+                opportunity: {
+                  website_offer: true,
+                  priority: 'high',
+                },
               }),
               created_at: new Date().toISOString(),
             });
+            // 2.D.3.3 — Emit DEEP_ENRICHMENT_OPPORTUNITY_SCORE event (idempotent)
+            const alreadyOpp = hasOpportunityScoreLogStmt.get(jobId, placeId);
+            if (!alreadyOpp) {
+              const opportunity = computeOpportunity({
+                website: null,
+                seo: { ok: false, reason: 'website_missing' },
+                tech: [],
+              });
+
+              insertLog.run({
+                job_id: jobId,
+                event_type: 'DEEP_ENRICHMENT_OPPORTUNITY_SCORE',
+                payload_json: JSON.stringify({
+                  job_id: jobId,
+                  google_place_id: placeId,
+                  website: null,
+                  seo: { ok: false, reason: 'website_missing' },
+                  tech: [],
+                  opportunity,
+                }),
+                created_at: new Date().toISOString(),
+              });
+            }
+          } else {
+            const existing = readLogRowStmt.get(
+              jobId,
+              'DEEP_ENRICHMENT_WEBSITE_MISSING',
+              placeId,
+            );
+
+            if (existing?.payload_json && !String(existing.payload_json).includes('"seo"')) {
+              let prev = {};
+              try {
+                prev = JSON.parse(existing.payload_json);
+              } catch (_) {
+                prev = {};
+              }
+
+              const next = {
+                ...prev,
+                job_id: jobId,
+                google_place_id: placeId,
+                status: prev.status || 'OK',
+                website: null,
+                seo: {
+                  ok: false,
+                  reason: 'website_missing',
+                  indexability: null,
+                  meta: null,
+                  schema: null,
+                },
+                opportunity: {
+                  website_offer: true,
+                  priority: 'high',
+                },
+              };
+
+              updateLogRowStmt.run(JSON.stringify(next), existing.row_id);
+            }
           }
         }
       } else if (out?.skipped === false && out?.res?.ok === false) {
@@ -281,7 +480,8 @@ async function processDeepEnrichmentBatch({ jobId, ids = [], sources = [] }) {
       }
     }
 
-    // If we still don't have a website, we can't do tech stub.
+    // (SEO signals/opportunity are now embedded in the WEBSITE_MISSING and TECH_STUB events)
+
     if (!website || !wantsTech) continue;
 
     // very light tech heuristic (same philosophy as dataFeederWorker)
@@ -293,7 +493,137 @@ async function processDeepEnrichmentBatch({ jobId, ids = [], sources = [] }) {
     if (w.includes('wordpress')) tech.push('wordpress');
 
     const alreadyTech = hasTechStubLogStmt.get(jobId, placeId);
-    if (alreadyTech) continue;
+    if (alreadyTech) {
+      const existing = readLogRowStmt.get(jobId, 'DEEP_ENRICHMENT_TECH_STUB', placeId);
+
+      if (existing?.payload_json && !String(existing.payload_json).includes('"seo"')) {
+        let prev = {};
+        try {
+          prev = JSON.parse(existing.payload_json);
+        } catch (_) {
+          prev = {};
+        }
+
+        const seo = await (async () => {
+          try {
+            const res = await fetch(website, { redirect: 'follow' });
+            const html = await res.text().catch(() => null);
+            const out = extractSeoSignalsFromHtml(html);
+            return {
+              ok: out.ok,
+              reason: out.reason,
+              ...(out.seo || {}),
+            };
+          } catch (e) {
+            return { ok: false, reason: 'fetch_failed' };
+          }
+        })();
+
+        // 2.D.3.4 — Social signals extraction from HTML
+        const social = extractSocialSignalsFromHtml(
+          (() => {
+            try {
+              // html may be undefined if fetch failed
+              return typeof html === 'string' ? html : '';
+            } catch (_) {
+              return '';
+            }
+          })(),
+        );
+
+        // Emit SEO-only event if not already present
+        const alreadySeo = hasSeoSignalsLogStmt.get(jobId, placeId);
+        if (!alreadySeo) {
+          insertLog.run({
+            job_id: jobId,
+            event_type: 'DEEP_ENRICHMENT_SEO_SIGNALS',
+            payload_json: JSON.stringify({
+              job_id: jobId,
+              google_place_id: placeId,
+              website,
+              seo,
+            }),
+            created_at: new Date().toISOString(),
+          });
+        }
+
+        // Emit SOCIAL_SIGNALS event if not already present
+        const alreadySocial = hasSocialSignalsLogStmt.get(jobId, placeId);
+        if (!alreadySocial) {
+          insertLog.run({
+            job_id: jobId,
+            event_type: 'DEEP_ENRICHMENT_SOCIAL_SIGNALS',
+            payload_json: JSON.stringify({
+              job_id: jobId,
+              google_place_id: placeId,
+              website,
+              social,
+            }),
+            created_at: new Date().toISOString(),
+          });
+        }
+
+        // 2.D.3.3 — Emit DEEP_ENRICHMENT_OPPORTUNITY_SCORE event (idempotent, after SEO)
+        const alreadyOpp = hasOpportunityScoreLogStmt.get(jobId, placeId);
+        if (!alreadyOpp) {
+          const opportunity = computeOpportunity({ website, seo, tech });
+          insertLog.run({
+            job_id: jobId,
+            event_type: 'DEEP_ENRICHMENT_OPPORTUNITY_SCORE',
+            payload_json: JSON.stringify({
+              job_id: jobId,
+              google_place_id: placeId,
+              website,
+              seo,
+              tech,
+              opportunity,
+            }),
+            created_at: new Date().toISOString(),
+          });
+        }
+
+        const next = {
+          ...prev,
+          job_id: jobId,
+          google_place_id: placeId,
+          website,
+          seo,
+          tech: Array.isArray(prev.tech) ? prev.tech : tech,
+        };
+
+        updateLogRowStmt.run(JSON.stringify(next), existing.row_id);
+      }
+
+      continue;
+    }
+
+    // Fetch SEO signals for fresh TECH_STUB
+    let html;
+    const seo = await (async () => {
+      try {
+        const res = await fetch(website, { redirect: 'follow' });
+        html = await res.text().catch(() => null);
+        const out = extractSeoSignalsFromHtml(html);
+        return {
+          ok: out.ok,
+          reason: out.reason,
+          ...(out.seo || {}),
+        };
+      } catch (e) {
+        return { ok: false, reason: 'fetch_failed' };
+      }
+    })();
+
+    // 2.D.3.4 — Social signals extraction from HTML (fresh path)
+    const social = extractSocialSignalsFromHtml(
+      (() => {
+        try {
+          return typeof html === 'string' ? html : '';
+        } catch (_) {
+          return '';
+        }
+      })(),
+    );
 
     insertLog.run({
       job_id: jobId,
@@ -302,10 +632,62 @@ async function processDeepEnrichmentBatch({ jobId, ids = [], sources = [] }) {
         job_id: jobId,
         google_place_id: placeId,
         website,
+        seo,
         tech,
       }),
       created_at: new Date().toISOString(),
     });
+
+    // Emit SEO-only event if not already present (for fresh TECH_STUB insert)
+    const alreadySeo = hasSeoSignalsLogStmt.get(jobId, placeId);
+    if (!alreadySeo) {
+      insertLog.run({
+        job_id: jobId,
+        event_type: 'DEEP_ENRICHMENT_SEO_SIGNALS',
+        payload_json: JSON.stringify({
+          job_id: jobId,
+          google_place_id: placeId,
+          website,
+          seo,
+        }),
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    // Emit SOCIAL_SIGNALS event if not already present (fresh path)
+    const alreadySocial = hasSocialSignalsLogStmt.get(jobId, placeId);
+    if (!alreadySocial) {
+      insertLog.run({
+        job_id: jobId,
+        event_type: 'DEEP_ENRICHMENT_SOCIAL_SIGNALS',
+        payload_json: JSON.stringify({
+          job_id: jobId,
+          google_place_id: placeId,
+          website,
+          social,
+        }),
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    // 2.D.3.3 — Emit DEEP_ENRICHMENT_OPPORTUNITY_SCORE event (idempotent, after SEO)
+    const alreadyOpp = hasOpportunityScoreLogStmt.get(jobId, placeId);
+    if (!alreadyOpp) {
+      const opportunity = computeOpportunity({ website, seo, tech });
+      insertLog.run({
+        job_id: jobId,
+        event_type: 'DEEP_ENRICHMENT_OPPORTUNITY_SCORE',
+        payload_json: JSON.stringify({
+          job_id: jobId,
+          google_place_id: placeId,
+          website,
+          seo,
+          tech,
+          opportunity,
+        }),
+        created_at: new Date().toISOString(),
+      });
+    }
 
     processed += 1;
   }

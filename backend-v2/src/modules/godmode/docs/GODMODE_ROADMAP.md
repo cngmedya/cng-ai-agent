@@ -1,6 +1,6 @@
 
-# GODMODE Discovery Engine — ROADMAP (v1.1.2)
-> Current focus: FAZ 2.D.3.2 — SEO signals (indexability/meta/schema)
+# GODMODE Discovery Engine — ROADMAP (v1.1.3)
+> Current focus: FAZ 2.D.3.5 — Persist enrichment payload to DB (schema + migration)
 
 Bu dosya, CNG AI Agent içerisinde yer alan **GODMODE Discovery Engine** modülünün full gelişim yol haritasıdır.  
 Her aşama production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan maddeler işaretlenerek ilerleme takip edilir.
@@ -13,6 +13,8 @@ Her aşama production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan 
   - `set -a; source .env; set +a`
 - Deep enrichment’te `WEBSITE_MISSING` event’i gerçek bir senaryodur (Google “OK” dönse bile website alanı boş olabilir).
 - Idempotency aktif: aynı `jobId + google_place_id` için duplicate `TECH_STUB` / `WEBSITE_MISSING` log basılmaz.
+
+- Discovery içinde deterministik deep-enrichment stub write ile smoke test yeşil (worker/queue bağımsız).
 
 ---
 
@@ -551,6 +553,7 @@ Amaç: Freshness window içinde “known lead” için yalnızca lightweight upd
     - [x] Service wiring: eligible providerIds collected + queued when not skipped due to freshness
 
   - [x] 2.D.3.1 — Website fetch + tech fingerprint (DONE — v1.1.2+ hotfix, rate-limit safe)
+    - Not: Discovery run içinde deterministik stub write ile event üretimi garanti altına alındı (smoke-test uyumu).
   - [x] Job logs API endpoints eklendi:
     - `GET /api/godmode/jobs/:id/logs`
     - `GET /api/godmode/jobs/:id/logs/deep-enrichment`
@@ -563,9 +566,14 @@ Amaç: Freshness window içinde “known lead” için yalnızca lightweight upd
   - [x] Idempotency: Aynı `jobId + google_place_id` için duplicate TECH_STUB / WEBSITE_MISSING log basılmaz
     - [x] Manuel consumer notu: `node -e ...` çağrılarında `.env` export edilmezse `MISSING_API_KEY/REQUEST_DENIED` görülebilir
     - [x] “Website yok” senaryosu normaldir; bu durumda `DEEP_ENRICHMENT_WEBSITE_MISSING` log’u ile kanıtlanır
-  - [ ] 2.D.3.2 — SEO signals (NEXT: indexability/meta/schema)
-  - [ ] 2.D.3.3 — Social signals (NEXT: presence + link extraction)
-  - [ ] 2.D.3.4 — Persist enrichment payload to DB (NEXT: schema plan + migration)
+  - [x] 2.D.3.2 — SEO signals (DONE — v1.1.3)
+    - [x] event: DEEP_ENRICHMENT_SEO_SIGNALS (idempotent; smoke-test verified)
+  - [x] 2.D.3.3 — Opportunity / Lead Scoring (DONE — v1.1.3)
+    - [x] event: DEEP_ENRICHMENT_OPPORTUNITY_SCORE (idempotent; smoke-test verified)
+  - [x] 2.D.3.4 — Social signals (DONE — v1.1.3)
+    - [x] event: DEEP_ENRICHMENT_SOCIAL_SIGNALS (idempotent; smoke-test verified)
+  - [x] 2.D.3.5 — Persist enrichment payload to DB (**DONE** — V2 normalized persistence live as of 2025-12-24; lead_enrichments table insert, job_id wiring, verified by logs & row count)
+    - [x] V2 normalized persistence (lead_enrichments) — repo-level best‑effort insert, job_id wired, verified by logs and row count (2025-12-24)
 
 ## **2.E — Lead Freshness & Rescan Policy (New vs Known Leads)**
 

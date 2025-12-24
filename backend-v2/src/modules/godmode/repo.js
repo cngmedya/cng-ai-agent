@@ -1,3 +1,112 @@
+// backend-v2/src/modules/godmode/repo.js
+
+const { getDb } = require('../../core/db');
+
+/**
+ * v2 – Persist deep enrichment snapshot into lead_enrichments table
+ */
+function insertLeadEnrichmentSnapshot({
+  leadId,
+  jobId,
+  provider,
+  providerId,
+  source,
+  seo,
+  social,
+  tech,
+  opportunity,
+}) {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  db.prepare(
+    `
+    INSERT INTO lead_enrichments (
+      lead_id,
+      job_id,
+      provider,
+      provider_id,
+      source,
+      seo_json,
+      social_json,
+      tech_json,
+      opportunity_json,
+      created_at
+    )
+    VALUES (
+      @lead_id,
+      @job_id,
+      @provider,
+      @provider_id,
+      @source,
+      @seo_json,
+      @social_json,
+      @tech_json,
+      @opportunity_json,
+      @created_at
+    )
+  `,
+  ).run({
+    lead_id: leadId,
+    job_id: jobId || null,
+    provider: provider || null,
+    provider_id: providerId || null,
+    source: source || 'godmode',
+    seo_json: seo ? JSON.stringify(seo) : null,
+    social_json: social ? JSON.stringify(social) : null,
+    tech_json: tech ? JSON.stringify(tech) : null,
+    opportunity_json: opportunity ? JSON.stringify(opportunity) : null,
+    created_at: now,
+  });
+
+  return { ok: true };
+}
+
+/**
+ * Get latest enrichment snapshot for a lead (v2)
+ */
+function getLatestLeadEnrichmentByLeadId(leadId) {
+  const db = getDb();
+
+  const row = db
+    .prepare(
+      `
+      SELECT
+        id,
+        lead_id,
+        job_id,
+        provider,
+        provider_id,
+        source,
+        seo_json,
+        social_json,
+        tech_json,
+        opportunity_json,
+        created_at
+      FROM lead_enrichments
+      WHERE lead_id = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    )
+    .get(leadId);
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    lead_id: row.lead_id,
+    job_id: row.job_id,
+    provider: row.provider,
+    provider_id: row.provider_id,
+    source: row.source,
+    seo: safeParseJson(row.seo_json, null),
+    social: safeParseJson(row.social_json, null),
+    tech: safeParseJson(row.tech_json, null),
+    opportunity: safeParseJson(row.opportunity_json, null),
+    created_at: row.created_at,
+  };
+}
 /**
  * Potential lead dedup + upsert
  * Canonical key: provider + provider_id (örn: google_places + place_id)
@@ -131,9 +240,6 @@ function upsertPotentialLead({
     last_seen_at_after: now,
   };
 }
-// backend-v2/src/modules/godmode/repo.js
-
-const { getDb } = require('../../core/db');
 
 /**
  * DB satırını job objesine çevir
@@ -438,6 +544,130 @@ function appendJobLog(jobId, eventType, payload) {
   });
 }
 
+function safeParseJson(text, fallback) {
+  try {
+    if (!text) return fallback;
+    return JSON.parse(text);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+/**
+ * Persist deep enrichment snapshot into potential_leads.raw_payload_json
+ * v1 approach: no new tables, merge under `_deep_enrichment`
+ */
+function upsertDeepEnrichmentIntoPotentialLead({
+  provider,
+  providerId,
+  enrichment,
+  jobId,
+}) {
+  const db = getDb();
+
+  const row = db
+    .prepare(
+      `
+      SELECT id, raw_payload_json
+      FROM potential_leads
+      WHERE provider = @provider AND provider_id = @provider_id
+      LIMIT 1
+    `,
+    )
+    .get({
+      provider,
+      provider_id: providerId,
+    });
+
+  if (!row) {
+    return { ok: false, reason: 'LEAD_NOT_FOUND' };
+  }
+
+  const raw = safeParseJson(row.raw_payload_json, {});
+  const next = {
+    ...raw,
+    _deep_enrichment: {
+      ...(raw && raw._deep_enrichment ? raw._deep_enrichment : {}),
+      ...enrichment,
+      job_id: jobId,
+      provider,
+      provider_id: providerId,
+      persisted_at: new Date().toISOString(),
+      version: 'v1.1.3',
+    },
+  };
+
+  db.prepare(
+    `
+    UPDATE potential_leads
+    SET raw_payload_json = @raw_payload_json,
+        updated_at = @updated_at
+    WHERE id = @id
+  `,
+  ).run({
+    id: row.id,
+    raw_payload_json: JSON.stringify(next),
+    updated_at: new Date().toISOString(),
+  });
+
+  // v2 normalized snapshot persist (lead_enrichments) – best-effort but observable
+  try {
+    const seo =
+      enrichment && typeof enrichment === 'object'
+        ? enrichment.seo || enrichment.seo_signals || null
+        : null;
+
+    const social =
+      enrichment && typeof enrichment === 'object'
+        ? enrichment.social || enrichment.social_signals || null
+        : null;
+
+    const tech =
+      enrichment && typeof enrichment === 'object'
+        ? enrichment.tech || enrichment.tech_stub || []
+        : [];
+
+    const opportunity =
+      enrichment && typeof enrichment === 'object'
+        ? enrichment.opportunity || enrichment.opportunity_score || null
+        : null;
+
+    appendJobLog(jobId, 'DEEP_ENRICHMENT_V2_REPO_PERSIST_TRY', {
+      provider,
+      provider_id: providerId,
+      lead_row_id: row.id,
+    });
+
+    insertLeadEnrichmentSnapshot({
+      leadId: row.id,
+      jobId: jobId || null,
+      provider: provider || null,
+      providerId: providerId || null,
+      source: 'godmode_repo_v2',
+      seo,
+      social,
+      tech,
+      opportunity,
+    });
+
+    appendJobLog(jobId, 'DEEP_ENRICHMENT_V2_REPO_PERSIST_OK', {
+      provider,
+      provider_id: providerId,
+      lead_row_id: row.id,
+    });
+  } catch (e2) {
+    appendJobLog(jobId, 'DEEP_ENRICHMENT_V2_REPO_PERSIST_ERROR', {
+      provider,
+      provider_id: providerId,
+      lead_row_id: row.id,
+      error: e2 && (e2.message || String(e2)),
+    });
+    // best-effort: do not fail v1 persist
+  }
+
+  return { ok: true, id: row.id };
+}
+
 /**
  * Deep Enrichment stage state append
  */
@@ -645,4 +875,7 @@ module.exports = {
   getDeepEnrichmentLogs,
   enqueueDeepEnrichmentCandidates,
   getDeepEnrichmentQueuedBatches,
+  upsertDeepEnrichmentIntoPotentialLead,
+  insertLeadEnrichmentSnapshot,
+  getLatestLeadEnrichmentByLeadId,
 };

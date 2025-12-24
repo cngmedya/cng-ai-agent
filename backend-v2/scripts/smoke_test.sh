@@ -79,6 +79,7 @@ JOB_ID=$(curl -s -X POST "$BASE_URL/api/godmode/jobs/discovery-scan" \
     "minGoogleRating": 3.5,
     "maxResults": 10,
     "channels": ["google_places"],
+    "forceRefresh": true,
     "notes": "smoke-test"
   }' | $JQ_BIN -r '.data.id')
 
@@ -93,6 +94,50 @@ curl -s "$BASE_URL/api/godmode/jobs/$JOB_ID" \
   | $JQ_BIN '{id: .data.id, label: .data.label, status: .data.status, result_summary: .data.result_summary}'
 echo "✔ Godmode discovery pipeline OK"
 echo
+
+###
+# 3B) GODMODE – DEEP ENRICHMENT ASSERTIONS (DB)
+# Not: Deep enrichment akışı async olabilir; kısa bir süre bekleyip DB'den doğruluyoruz.
+###
+echo "▶ 3B) Godmode deep enrichment log assertion (DB)..."
+
+DB_PATH="data/app.sqlite"
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "⚠ sqlite3 bulunamadı: deep enrichment DB assertion atlandı (smoke test false-green olabilir)."
+  echo
+else
+  if [ ! -f "$DB_PATH" ]; then
+    echo "[ERR] SQLite DB bulunamadı: $DB_PATH"
+    exit 1
+  fi
+
+  MISSING_CNT=0
+  TECH_CNT=0
+
+  # Deep enrichment async olabilir: 10 tur * 2sn = 20sn bekle
+  for _i in {1..10}; do
+    MISSING_CNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM godmode_job_logs WHERE job_id='$JOB_ID' AND event_type='DEEP_ENRICHMENT_WEBSITE_MISSING';")
+    TECH_CNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM godmode_job_logs WHERE job_id='$JOB_ID' AND event_type='DEEP_ENRICHMENT_TECH_STUB';")
+
+    if [ "$MISSING_CNT" -gt 0 ] || [ "$TECH_CNT" -gt 0 ]; then
+      break
+    fi
+    sleep 2
+  done
+
+  echo "  → Deep enrichment counts (job_id=$JOB_ID): WEBSITE_MISSING=$MISSING_CNT TECH_STUB=$TECH_CNT"
+
+  if [ "$MISSING_CNT" -eq 0 ] && [ "$TECH_CNT" -eq 0 ]; then
+    echo "[ERR] Godmode deep enrichment logs bulunamadı. GODMODE_DEEP_ENRICHMENT=1 ve worker akışını kontrol et."
+    exit 1
+  fi
+
+  echo "  → Deep enrichment sample payloads:"
+  sqlite3 "$DB_PATH" "SELECT event_type, substr(payload_json,1,280) FROM godmode_job_logs WHERE job_id='$JOB_ID' AND event_type IN ('DEEP_ENRICHMENT_WEBSITE_MISSING','DEEP_ENRICHMENT_TECH_STUB') ORDER BY created_at DESC LIMIT 6;"
+  echo "✔ Godmode deep enrichment DB assertion OK"
+  echo
+fi
 
 ###
 # 4) EMAIL MODULE – TEST LOG

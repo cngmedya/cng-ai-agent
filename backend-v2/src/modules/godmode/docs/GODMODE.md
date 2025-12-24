@@ -51,6 +51,9 @@ Her job için adım adım event kaydı tutulur:
 	•	DEEP_ENRICHMENT_TECH_STUB
 	•	DEEP_ENRICHMENT_WEBSITE_MISSING
 	•	DEEP_ENRICHMENT_WEBSITE_FETCH_FAILED
+	•	DEEP_ENRICHMENT_V2_REPO_PERSIST_TRY
+	•	DEEP_ENRICHMENT_V2_REPO_PERSIST_OK
+	•	DEEP_ENRICHMENT_V2_REPO_PERSIST_ERROR
 
 Tablo: godmode_job_logs
 
@@ -76,6 +79,22 @@ Normalize edilmiş provider verileri:
 
     [GODMODE][PIPELINE] potential_leads upsert tamamlandı. affected=N
 
+### **8. V2 Normalize Enrichment Persistence (NEW)**
+- Deep enrichment çıktıları artık normalize şekilde saklanır
+- Yeni tablo: `lead_enrichments`
+- Snapshot bazlı tasarım:
+  - job_id
+  - lead_id
+  - provider / provider_id
+  - seo / social / tech / opportunity JSON alanları
+  - created_at
+- Repo seviyesinde best‑effort persist:
+  - Service branch’lerinden bağımsız
+  - V1 (`potential_leads.raw_payload_json`) bozulmadan korunur
+- Event log kanıtları:
+  - `DEEP_ENRICHMENT_V2_REPO_PERSIST_TRY`
+  - `DEEP_ENRICHMENT_V2_REPO_PERSIST_OK`
+
 🧩 Mimari
 
 godmode/
@@ -96,7 +115,7 @@ godmode/
 │   ├── index.js            → Provider registry
 │   └── providersRunner.js  → Provider orchestrator
 │
-├── repo.js                 → DB access layer
+├── repo.js                 → DB access layer (v2 enrichment persistence burada)
 ├── service.js              → Job management + business logic
 ├── validator.js            → Job input validation
 │
@@ -159,6 +178,9 @@ Her sayfa:
 - Google Place Details fallback:
   - Website yoksa otomatik denenir
   - Rate-limit safe (429 kovalanmaz)
+- V2 persistence aktif:
+  - Enrichment snapshot’ları `lead_enrichments` tablosuna yazılır
+  - Idempotent ve job‑aware çalışır
 
 ### **10. Idempotent Enrichment Execution**
 - Aynı `jobId + google_place_id` için:

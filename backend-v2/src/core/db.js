@@ -1,9 +1,57 @@
 // backend-v2/src/core/db.js
 
 const path = require('path');
+const fs = require('fs');
 const Database = require('better-sqlite3');
 
 let db;
+
+function runCoreMigrations(dbInstance) {
+  const migrationsDir = path.join(__dirname, 'migrations');
+
+  if (!fs.existsSync(migrationsDir)) return;
+
+  dbInstance.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+  `);
+
+  const applied = new Set(
+    dbInstance
+      .prepare(`SELECT id FROM schema_migrations`)
+      .all()
+      .map((r) => r.id),
+  );
+
+  const files = fs
+    .readdirSync(migrationsDir)
+    .filter((f) => /^\d{3}_.+\.js$/.test(f))
+    .sort();
+
+  for (const file of files) {
+    const fullPath = path.join(__dirname, 'migrations', file);
+
+    // eslint-disable-next-line global-require, import/no-dynamic-require
+    const mig = require(fullPath);
+
+    const migId = mig && mig.id ? mig.id : file.replace(/\.js$/, '');
+    if (applied.has(migId)) continue;
+
+    if (!mig || typeof mig.up !== 'function') {
+      throw new Error(`[core/db] invalid migration file: ${file}`);
+    }
+
+    mig.up(dbInstance);
+
+    dbInstance
+      .prepare(
+        `INSERT INTO schema_migrations (id, applied_at) VALUES (@id, @applied_at)`,
+      )
+      .run({ id: migId, applied_at: new Date().toISOString() });
+  }
+}
 
 /**
  * Tüm ana veritabanı şemasını burada açıyoruz.
@@ -184,11 +232,11 @@ function initSchema(dbInstance) {
       type TEXT NOT NULL,             -- discovery_scan vb.
       label TEXT,
       criteria_json TEXT NOT NULL,    -- request.body kriterleri (JSON)
-      status TEXT NOT NULL,           -- queued | running | completed | failed
+      status TEXT NOT NULL,
       progress_percent INTEGER DEFAULT 0,
       found_leads INTEGER DEFAULT 0,
       enriched_leads INTEGER DEFAULT 0,
-      result_summary_json TEXT,       -- summary + stats (JSON)
+      result_summary_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -204,7 +252,7 @@ function initSchema(dbInstance) {
   dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS godmode_job_progress (
       job_id TEXT PRIMARY KEY,
-      percent INTEGER DEFAULT 0,      -- repo.js p.percent böyle bekliyor
+      percent INTEGER DEFAULT 0,
       found_leads INTEGER DEFAULT 0,
       enriched_leads INTEGER DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -230,8 +278,8 @@ function initSchema(dbInstance) {
   dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS godmode_job_results (
       job_id TEXT PRIMARY KEY,
-      result_summary_json TEXT,       -- ekstra / geleceğe dönük alan
-      raw_results_json TEXT,          -- detaylı sonuçlar için alan (şimdilik opsiyonel)
+      result_summary_json TEXT,
+      raw_results_json TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -239,6 +287,8 @@ function initSchema(dbInstance) {
     CREATE INDEX IF NOT EXISTS idx_godmode_job_results_job_id
       ON godmode_job_results (job_id);
   `);
+
+  runCoreMigrations(dbInstance);
 }
 
 function getDb() {
