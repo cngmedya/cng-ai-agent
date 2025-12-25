@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node src/server.js",
     "start": "node src/server.js",
+    "migrate": "node src/jobs/migrateCore.js",
     "migrate:old-leads": "node src/jobs/migrateOldLeads.js",
     "migrate:add-ai-columns": "node src/jobs/migrate_add_ai_columns.js",
     "migrate:cir": "node src/jobs/migrate_add_cir_support.js"

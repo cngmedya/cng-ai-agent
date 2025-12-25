@@ -1,6 +1,6 @@
 
-# GODMODE Discovery Engine — ROADMAP (v1.1.3)
-> Current focus: FAZ 2.D.3.5 — Persist enrichment payload to DB (schema + migration)
+# GODMODE Discovery Engine — ROADMAP (v1.1.11)
+> Current focus: FAZ 3.E — Next Brain Artifact (post‑3.D)
 
 Bu dosya, CNG AI Agent içerisinde yer alan **GODMODE Discovery Engine** modülünün full gelişim yol haritasıdır.  
 Her aşama production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan maddeler işaretlenerek ilerleme takip edilir.
@@ -16,6 +16,26 @@ Her aşama production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan 
 
 - Discovery içinde deterministik deep-enrichment stub write ile smoke test yeşil (worker/queue bağımsız).
 
+- 2025-12-24: Smoke test full-green doğrulandı (discovery → deep enrichment → outreach → research). Freshness gating, forceRefresh ve V2 enrichment persistence prod seviyesinde stabil.
+- 2025-12-25: Full smoke çıktı analizine göre `potential_leads.raw_payload_json._merge.last_discovery_job_id` alanı “son discovery run” tarafından overwrite edildiği için, smoke_test.sh assertion’ı JOB_ID_1 yerine JOB_ID_3 (final) ile doğrulanacak şekilde güncellendi (false WARN kapatıldı).
+- 2025-12-25: Full smoke tekrar koşturuldu ve yeşil doğrulandı; deep enrichment (TECH_STUB=10), V2 persistence (JOB_ID_1=10, JOB_ID_3=10), freshness gating ve FAZ 2.E metrikleri prod seviyesinde stabil.
+
+- 2025-12-24: FAZ 2.E başlangıç deliverable tamamlandı: upsertPotentialLead job-aware yapıldı (is_new + scan_count before/after), DEDUP_DONE payload’ına new/known/scan_total metrikleri eklendi.
+- 2025-12-24: raw_payload_json overwrite bug fix: deep enrichment update artık _merge.last_discovery_job_id alanını koruyor (repo-level safe merge).
+- 2025-12-24: Smoke test 3B.3: FAZ 2.E metrikleri deterministik doğrulanıyor (DEDUP_DONE counters). potential_leads last_discovery_job_id assertion environment’a göre WARN olabilir.
+ 
+- 2025-12-24: FAZ 2.E.2 (MINIMAL) tamamlandı: rescan eligibility (time/manual) + scan_count cap + observability (RESCAN_ELIGIBLE / RESCAN_BLOCKED_SCANCOUNT_CAP) + DEDUP_DONE payload alanları (rescan_after_hours, scancount_cap, counters).
+- 2025-12-24: Smoke test kanıtı: JOB_ID_3 DEDUP_DONE → rescanned_due_to_manual_count=10, rescanned_due_to_time_count=0, rescan_after_hours=720, scancount_cap=10.
+
+- 2025-12-24: FAZ 3.A (v1 minimal) tamamlandı: Godmode modülü içinde ai/ klasörü açıldı; leadRanking.prompt.js + leadRanking.schema.js eklendi; service.js içine AI ranking wiring eklendi (LLM opt-in: GODMODE_AI_LEAD_RANKING=1, aksi halde deterministic heuristic fallback).
+- 2025-12-24: Job log events: AI_LEAD_RANKED (lead bazında) + AI_LEAD_RANKING_DONE (özet) DB write ile doğrulandı (mini smoke + full smoke green).
+- 2025-12-24: Mini smoke eklendi ve stabilize edildi: ./scripts/smoke_godmode_min.sh (forceRefresh=true + 30s poll).
+- 2025-12-25: Mini smoke'a SMOKE_FORCE_AB=1 modu eklendi (test-only). Amaç: A/B lead üretimini tetikleyip Auto-SWOT + Outreach Draft + Persistence zincirini daha deterministik şekilde egzersiz etmek. Not: veri şartlarına bağlı olarak yine de A/B çıkmayabilir; kesin kanıt için “real AB job” kanıtı kullanılır (aşağıda).
+- 2025-12-24: Global test standardı Master Document’e eklendi: Mini smoke (hızlı iterasyon) vs Full smoke (release gate).
+
+- Phase transition rule: **Before advancing to a new FAZ, Full Smoke (`./scripts/smoke_test.sh`) must pass green.** Mini smoke is for iteration only.
+
+- 2025-12-25: smoke_test.sh 3B deep-enrichment assertions hardened: deep enrichment is optional; when the deep-enrichment worker is not running, the test emits WARN + SKIP instead of false-failing. Strict persistence asserts run only when worker signals exist (accepts V2 or legacy persist OK events).
 ---
 
 # FAZ 1 — CORE DISCOVERY ENGINE (MVP → STABLE)
@@ -544,7 +564,7 @@ Amaç: Freshness window içinde “known lead” için yalnızca lightweight upd
   - [x] `economicAnalyzerWorker` stage-aware placeholder signals
   - [x] `entityResolverWorker` stage-aware normalized entity stub
 
-- [ ] 2.D.3 — Real enrichment execution (IN PROGRESS)
+  - [x] 2.D.3 — Real enrichment execution (COMPLETED — v1.1.4)
   - [x] 2.D.3.0 — Candidate ID collection + queue persistence (DONE — infra)
     - [x] Candidate ID collection (cap/opt-in): `GODMODE_DEEP_ENRICHMENT_COLLECT_IDS`, `GODMODE_DEEP_ENRICHMENT_IDS_CAP`
     - [x] Queue persistence via job logs (no new tables yet):
@@ -572,28 +592,30 @@ Amaç: Freshness window içinde “known lead” için yalnızca lightweight upd
     - [x] event: DEEP_ENRICHMENT_OPPORTUNITY_SCORE (idempotent; smoke-test verified)
   - [x] 2.D.3.4 — Social signals (DONE — v1.1.3)
     - [x] event: DEEP_ENRICHMENT_SOCIAL_SIGNALS (idempotent; smoke-test verified)
+    - Idempotency + event determinism verified: duplicate runs do not create duplicate DEEP_ENRICHMENT_* logs.
   - [x] 2.D.3.5 — Persist enrichment payload to DB (**DONE** — V2 normalized persistence live as of 2025-12-24; lead_enrichments table insert, job_id wiring, verified by logs & row count)
+    - Verified via smoke_test.sh + direct DB row count assertion (JOB_ID_1 / JOB_ID_3).
     - [x] V2 normalized persistence (lead_enrichments) — repo-level best‑effort insert, job_id wired, verified by logs and row count (2025-12-24)
 
 ## **2.E — Lead Freshness & Rescan Policy (New vs Known Leads)**
 
 Amaç: Aynı firmayı gereksiz yere tekrar tekrar ağır analizden geçirmeden, “yeni lead” ile “zaten bildiğimiz lead” ayrımını netleştirmek ve discovery sonuçlarını daha akıllı şekilde sınıflandırmak.
 
-- [ ] DB model geliştirmesi:
-  - [ ] `first_seen_at` alanı (lead ilk ne zaman keşfedildi?)
-  - [ ] `last_seen_at` alanı (en son hangi discovery job’ında görüldü?)
-  - [ ] `scan_count` alanı (kaç farklı discovery run’ında yakalandı?)
-  - [ ] `last_discovery_job_id` alanı (en son hangi job üzerinden geldi?)
+- [x] DB model geliştirmesi:
+  - [x] `first_seen_at` alanı (lead ilk ne zaman keşfedildi?)
+  - [x] `last_seen_at` alanı (en son ne zaman görüldü?)
+  - [x] `scan_count` alanı (kaç farklı discovery run’ında yakalandı?)
+  - [x] `last_discovery_job_id` (şu an `potential_leads.raw_payload_json._merge.last_discovery_job_id` içinde persist ediliyor; ileride kolonlaştırılabilir)
 
-- [ ] Discovery davranışı:
-  - [ ] Yeni bir provider sonucu geldiğinde:
-    - [ ] Aynı `provider + provider_id` (örn. `google_places + place_id`) varsa:
-      - [ ] Yeni satır eklemeyip mevcut kaydı update et
-      - [ ] `scan_count` +1
-      - [ ] `last_seen_at` güncelle
-    - [ ] Yoksa:
-      - [ ] `first_seen_at` ve `last_seen_at` aynı olacak şekilde yeni lead oluştur
-      - [ ] `scan_count = 1`
+- [x] Discovery davranışı:
+  - [x] Yeni bir provider sonucu geldiğinde:
+    - [x] Aynı `provider + provider_id` (örn. `google_places + place_id`) varsa:
+      - [x] Yeni satır eklemeyip mevcut kaydı update et
+      - [x] `scan_count` +1
+      - [x] `last_seen_at` güncelle
+    - [x] Yoksa:
+      - [x] `first_seen_at` ve `last_seen_at` aynı olacak şekilde yeni lead oluştur
+      - [x] `scan_count = 1`
 
 - [ ] Raporlama / filtreleme hazırlığı:
   - [ ] “Sadece yeni lead’leri göster” filtresi için gerekli alanların netleştirilmesi
@@ -604,6 +626,19 @@ Amaç: Aynı firmayı gereksiz yere tekrar tekrar ağır analizden geçirmeden, 
   - [ ] Lead intel tablosu için `intel_last_updated_at` ve `intel_freshness_state` alanlarının tasarlanması
   - [ ] Discovery tarafında, gerekirse bir lead için “force refresh” (örneğin UI’de “Analizi güncelle” butonu) flag’ine cevap verebilecek hook’ların planlanması
 
+**2.E.1 — Job-aware metrics (DONE — v1.1.5)**
+- [x] Repo upsert dönüşü: is_new + scan_count_before/after
+- [x] Service DEDUP_DONE payload: new_leads_count, known_leads_count, scan_count_total_before/after
+- [x] Enrichment update safety: _merge korunur, last_discovery_job_id kaybolmaz
+- [x] Smoke test: DEDUP_DONE counters deterministik doğrulanır (3B.3)
+
+**2.E.2 — Rescan / Refresh Policy (MINIMAL) (DONE — v1.1.5)**
+- [x] Env: `GODMODE_RESCAN_AFTER_HOURS` (default: 720 / 30 gün), `GODMODE_RESCAN_SCANCOUNT_CAP` (default: 10)
+- [x] Eligibility: time/manual + scan_count guardrail
+- [x] Job log events: `RESCAN_ELIGIBLE`, `RESCAN_BLOCKED_SCANCOUNT_CAP`
+- [x] DEDUP_DONE payload: rescan_after_hours, scancount_cap, rescanned_due_to_time_count, rescanned_due_to_manual_count, blocked_by_scancount_cap_count, skipped_due_to_rescan_policy_count
+- [x] Smoke test verified (full-green)
+
 ---
 
 # FAZ 3 — BRAIN INTEGRATION (AI DECISION PIPELINE)
@@ -612,25 +647,145 @@ Discovery sonuçlarının otomatik analiz edilmesi.
 
 ## **3.A — AI Lead Ranking**
 
-- [ ] Lead AI Score v2  
-- [ ] Opportunity score  
-- [ ] Risk score  
-- [ ] Category positioning  
+### 3.A.1 — Lead Ranking (v1 minimal) ✅ DONE — v1.1.6
+- [x] Modül içi prompt konumu: `modules/godmode/ai/`
+- [x] Prompt: `ai/leadRanking.prompt.js` (strict JSON output)
+- [x] Schema: `ai/leadRanking.schema.js` (additionalProperties=false, enum/limits)
+- [x] Service wiring: `service.js` içinde rankLead()
+  - [x] LLM opt-in: `GODMODE_AI_LEAD_RANKING=1`
+  - [x] Backward compatible llmClient interface denemesi (chatJson/completeJson/chat)
+  - [x] Deterministic fallback: `heuristic_v1` (website_missing ağırlıklı)
+- [x] Job log events:
+  - [x] `AI_LEAD_RANKED` (lead bazında)
+  - [x] `AI_LEAD_RANKING_DONE` (summary: enabled/top)
+- [x] Smoke test:
+  - [x] Full smoke green
+  - [x] Mini smoke green: `./scripts/smoke_godmode_min.sh`
+
+- [x] **Definition of Done (DoD) — LOCKED**
+  - [x] Ranking çıktısı deterministik (LLM kapalıyken heuristic fallback)
+  - [x] LLM açıkken strict JSON schema ile validate edilir
+  - [x] Job log kanıtı: `AI_LEAD_RANKED` + `AI_LEAD_RANKING_DONE`
+  - [x] Mini smoke + Full smoke green (release gate)
+  - [x] Bu faz “tam kapatıldı”: yeni değişiklik yalnızca yeni bir FAZ kararıyla yapılır
+
+### 3.A.2 — Lead Ranking (v1.1) — BACKLOG (post‑FAZ 3.D)
+- [ ] Ranking input’unu `potential_leads` / `lead_enrichments` verileriyle zenginleştir (rating, reviews, opportunity_score vb.) (ileride)
+- [ ] Ranking sonucunu DB’ye persist et (lead-level alanlar veya ayrı tablo tasarımı)
+- [ ] API: “Top ranked leads” endpoint (limit/filter)
 
 ## **3.B — Auto-SWOT**
 
-- [ ] Her lead için instant SWOT  
-- [ ] Pazar karşılaştırmalı SWOT  
-- [ ] Industry-fit değerlendirmesi  
+### 3.B.1 — Auto-SWOT (v1 minimal) ✅ DONE — v1.1.7
+- [x] Prompt: `ai/autoSwot.prompt.js` (strict JSON, sales‑oriented)
+- [x] Schema: `ai/autoSwot.schema.js` (additionalProperties=false)
+- [x] Service wiring: A/B band only, LLM opt‑in `GODMODE_AI_AUTO_SWOT=1`, deterministic heuristic fallback
+- [x] Job log events:
+  - `AI_AUTO_SWOT_GENERATED` (lead-level, optional when no A/B)
+  - `AI_AUTO_SWOT_DONE` (summary)
+- [x] Mini smoke stabilized (`smoke_godmode_min.sh`)
+- [x] Full smoke verified before phase transition
 
-## **3.C — Auto-Sales Entry Strategy**
 
-- [ ] Entry channel önerisi  
-- [ ] Açılış cümlesi  
-- [ ] Hızlı kazanım önerileri  
-- [ ] Red flag’lere göre uyarılar  
+## **3.C — Auto-Outreach Draft**
+
+### 3.C.1 — Outreach Draft (v1 minimal) ✅ DONE — v1.1.8
+- [x] Prompt: `ai/outreachDraft.prompt.js` (strict JSON)
+- [x] Schema: `ai/outreachDraft.schema.js`
+- [x] Service wiring: consume Auto‑SWOT + ranking to produce a single opening message
+- [x] Scope:
+  - 1 suggested channel
+  - 1 opening message
+  - 1 CTA
+- [x] Job log events:
+  - `AI_OUTREACH_DRAFT_GENERATED`
+  - `AI_OUTREACH_DRAFT_DONE`
+- [x] No sending / scheduling (execution belongs to Outreach module)
+  - DB kanıtı: AI_OUTREACH_DRAFT_DONE job log’u ile doğrulandı (2025-12-24).
+  - Mini smoke kanıtı: AI_OUTREACH_DRAFT_DONE (draft_count=0 olabilir; A/B yoksa normal).
+
+
+### 3.C.2 — Outreach Draft Persistence (READ-ONLY) ✅ DONE — v1.1.9
+- [x] Draft çıktısı `ai_artifacts` tablosuna persist edilir (`artifact_type='outreach_draft_v1'`)
+- [x] Observability:
+  - [x] `AI_OUTREACH_DRAFT_PERSISTED`
+  - [x] `AI_OUTREACH_DRAFT_PERSIST_ERROR` (negatif kanıt; olmamalı)
+- [x] Mini smoke (günlük iterasyon) doğrulaması:
+  - [x] Draft üretilmezse `ai_artifacts=0` olması normal (A/B yoksa)
+  - [x] Draft üretildiğinde `ai_artifacts(outreach_draft_v1) >= 1` olmalı
+- [x] Gerçek A/B kanıtı (data-driven):
+  - [x] Ranking band dağılımında A/B görüldüğünde zincir çalışır ve `ai_artifacts` satırı oluşur (örnek: `A|1` + `ai_artifacts=1` doğrulandı).
+- [x] Full smoke gate: `./scripts/smoke_test.sh` yeşil (faz geçiş şartı)
+
+
+## **3.D — Auto-Sales Entry Strategy**
+
+### 3.D.1 — Sales Entry Strategy (v1 minimal) ✅ DONE — v1.1.10
+- [x] Prompt: `ai/salesEntryStrategy.prompt.js` (strict JSON)
+- [x] Schema: `ai/salesEntryStrategy.schema.js` (additionalProperties=false)
+- [x] Service wiring: deterministic “brain sample” pipeline stage (top‑10 sample)
+  - [x] LLM opt‑in: `GODMODE_AI_SALES_ENTRY_STRATEGY=1`, deterministic fallback when disabled
+  - [x] Lead-level event: `AI_SALES_ENTRY_STRATEGY_GENERATED`
+  - [x] Job summary event: `AI_SALES_ENTRY_STRATEGY_DONE`
+- [x] Persistence:
+  - [x] `ai_artifacts` insert (`artifact_type='sales_entry_strategy_v1'`)
+  - [x] Observability: `AI_SALES_ENTRY_STRATEGY_PERSISTED` + `AI_SALES_ENTRY_STRATEGY_PERSIST_ERROR` (negatif kanıt; olmamalı)
+- [x] Smoke test proof:
+  - [x] Mini smoke green (`./scripts/smoke_godmode_min.sh`)
+  - [x] Full smoke green (`./scripts/smoke_test.sh`) — phase transition gate
+
+- [x] **Definition of Done (DoD) — LOCKED**
+  - [x] LLM kapalıyken deterministik fallback ile çalışır
+  - [x] LLM açıkken strict JSON schema ile validate edilir
+  - [x] DB kanıtı: job log + `ai_artifacts(sales_entry_strategy_v1) >= 1`
+# 3.E — Next Brain Artifact (Decision Phase)
+
+## **3.E — Next Brain Artifact (Decision Phase)**
+
+Bu faz, FAZ 3’ün **karar noktasıdır**.  
+Amaç yeni bir AI özelliği eklemek değil; **hangi AI karar artefaktının gerçekten eklenmeye değer olduğuna karar vermektir**.
+
+FAZ 3.A–3.D ile:
+- Lead Ranking
+- Auto‑SWOT
+- Outreach Draft
+- Sales Entry Strategy
+
+tamamlandı ve GODMODE artık “düşünebilen” bir discovery engine oldu.
+
+**3.E’nin rolü:**  
+Yeni bir prompt dosyası açmadan önce durmak, sistemi tartmak ve *bir sonraki* AI hamleyi bilinçli seçmek.
 
 ---
+
+### **3.E.1 — Scope Lock (Zorunlu Karar Adımı)**
+
+Bu adım geçilmeden **hiçbir yeni AI dosyası açılmaz**.
+
+- [ ] Tek bir “brain artifact” seçilir
+- [ ] Artifact’ın *neden gerekli olduğu* netleştirilir
+- [ ] Girdi seti tanımlanır  
+  (ranking + SWOT + enrichment + discovery metadata)
+- [ ] Çıktı contract’ı (strict JSON) tasarlanır
+- [ ] Definition of Done (DoD) yazılır
+- [ ] Full smoke test geçiş şartı belirlenir
+
+---
+
+### **3.E.2 — Aday Brain Artefact’ler**
+
+Bu listeden **yalnızca biri** seçilip uygulanacaktır:
+
+- [ ] **Follow‑up Timing / Cadence**
+  - “Bu lead’e ne zaman tekrar yazmalıyız?”
+- [ ] **Channel Strategy Intelligence**
+  - “İlk temas için ideal kanal + alternatif plan”
+- [ ] **Deal Probability / Win Likelihood**
+  - “Bu lead’in satışa dönüşme ihtimali”
+- [ ] **Objection Handling Angle**
+  - “En muhtemel itiraz ve buna karşı argüman”
+
+> Kural: 3.E tamamlanmadan FAZ 4’e veya yeni AI prompt’larına geçilmez.
 
 # FAZ 4 — FULL AUTOMATION & OUTREACH ECOSYSTEM (ENTERPRISE MODE)
 
@@ -679,3 +834,9 @@ Discovery sonuçlarının otomatik analiz edilmesi.
 - DB canonical kuralı:
   - Kod + doküman + smoke test → `data/` dizinini referans alır
   - Bu kural FAZ 2 ve sonrası için değişmez kabul edilir
+
+**FAZ 2.D STATUS**
+- All deep enrichment stages implemented and verified.
+- Freshness gating + forceRefresh behavior smoke-tested.
+- Persistence confirmed (V2 normalized DB model).
+- Ready to advance focus to FAZ 2.E.

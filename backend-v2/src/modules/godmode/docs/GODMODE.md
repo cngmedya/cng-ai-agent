@@ -1,4 +1,4 @@
-# GODMODE Discovery Engine — v1.1.2-live
+# GODMODE Discovery Engine — v1.1.11
 Next-gen Omni-Data Discovery Pipeline
 
 GODMODE, CNG AI Agent ekosistemi içinde yer alan yüksek kapasiteli tarama, keşif ve zeka toplama motorudur.  
@@ -8,10 +8,10 @@ Faz 2 ile çok sağlayıcılı (multi-provider), paralel çalışan ve AI destek
 ---
 
 # ✔️ **Sürüm Bilgisi**
-- **Version:** `v1.1.2-live`
-- **Release Date:** 2025-12-23
-- **Status:** Production-grade stable (Faz 1 tamamlandı, Faz 2 aktif geliştirme)
-- **Next Target:** Faz 2 — Deep Enrichment, Freshness & Multi-Provider Expansion
+- **Version:** `v1.1.11`
+- **Release Date:** 2025-12-25
+- **Status:** Production-grade stable (Faz 1–2 tamamlandı, Faz 3 aktif geliştirme)
+- **Next Target:** Faz 3.E — Next Brain Artifact
 
 ---
 
@@ -51,9 +51,6 @@ Her job için adım adım event kaydı tutulur:
 	•	DEEP_ENRICHMENT_TECH_STUB
 	•	DEEP_ENRICHMENT_WEBSITE_MISSING
 	•	DEEP_ENRICHMENT_WEBSITE_FETCH_FAILED
-	•	DEEP_ENRICHMENT_V2_REPO_PERSIST_TRY
-	•	DEEP_ENRICHMENT_V2_REPO_PERSIST_OK
-	•	DEEP_ENRICHMENT_V2_REPO_PERSIST_ERROR
 
 Tablo: godmode_job_logs
 
@@ -79,22 +76,6 @@ Normalize edilmiş provider verileri:
 
     [GODMODE][PIPELINE] potential_leads upsert tamamlandı. affected=N
 
-### **8. V2 Normalize Enrichment Persistence (NEW)**
-- Deep enrichment çıktıları artık normalize şekilde saklanır
-- Yeni tablo: `lead_enrichments`
-- Snapshot bazlı tasarım:
-  - job_id
-  - lead_id
-  - provider / provider_id
-  - seo / social / tech / opportunity JSON alanları
-  - created_at
-- Repo seviyesinde best‑effort persist:
-  - Service branch’lerinden bağımsız
-  - V1 (`potential_leads.raw_payload_json`) bozulmadan korunur
-- Event log kanıtları:
-  - `DEEP_ENRICHMENT_V2_REPO_PERSIST_TRY`
-  - `DEEP_ENRICHMENT_V2_REPO_PERSIST_OK`
-
 🧩 Mimari
 
 godmode/
@@ -115,7 +96,17 @@ godmode/
 │   ├── index.js            → Provider registry
 │   └── providersRunner.js  → Provider orchestrator
 │
-├── repo.js                 → DB access layer (v2 enrichment persistence burada)
+├── ai/
+│   ├── leadRanking.prompt.js
+│   ├── leadRanking.schema.js
+│   ├── autoSwot.prompt.js
+│   ├── autoSwot.schema.js
+│   ├── outreachDraft.prompt.js
+│   ├── outreachDraft.schema.js
+│   ├── salesEntryStrategy.prompt.js
+│   └── salesEntryStrategy.schema.js
+│
+├── repo.js                 → DB access layer
 ├── service.js              → Job management + business logic
 ├── validator.js            → Job input validation
 │
@@ -178,9 +169,6 @@ Her sayfa:
 - Google Place Details fallback:
   - Website yoksa otomatik denenir
   - Rate-limit safe (429 kovalanmaz)
-- V2 persistence aktif:
-  - Enrichment snapshot’ları `lead_enrichments` tablosuna yazılır
-  - Idempotent ve job‑aware çalışır
 
 ### **10. Idempotent Enrichment Execution**
 - Aynı `jobId + google_place_id` için:
@@ -246,7 +234,96 @@ GET /api/godmode/jobs/:id/logs
 GET /api/godmode/jobs/:id/logs/deep-enrichment
 → Sadece deep enrichment event’lerini döner
 
----
+⸻
+
+## 🧠 Faz 3 — AI Decision Layer (Brain Integration)
+
+GODMODE artık yalnızca veri toplayan bir discovery motoru değil, aynı zamanda
+“kime, ne zaman, nasıl yaklaşmalıyız?” sorularına cevap üreten bir karar katmanı içerir.
+
+### 12. Lead Ranking (v1)
+- Amaç: Discovery + enrichment sonuçlarını A / B / C band’lerine ayırmak.
+- Inputs: deduped lead snapshot + enrichment sinyalleri.
+- Outputs:
+  - `ai_score_band`
+  - `priority_score`
+  - `why_now`
+  - `ideal_entry_channel`
+- Notlar:
+  - LLM opt-in: `GODMODE_AI_LEAD_RANKING=1`
+  - Kapalıysa deterministik heuristic ranking kullanılır.
+
+### 13. Auto-SWOT (v1)
+- Amaç: Satış odaklı SWOT analizi üretmek (sadece A/B lead’ler).
+- Inputs: ranking sonucu + enrichment snapshot.
+- Outputs: yapılandırılmış SWOT JSON:
+  - Strengths
+  - Weaknesses
+  - Opportunities
+  - Threats
+- Notlar:
+  - LLM opt-in: `GODMODE_AI_AUTO_SWOT=1`
+  - Heuristic fallback desteklenir.
+
+### 14. Auto-Outreach Draft (v1)
+- Amaç: İlk temas için outreach mesaj taslağı üretmek.
+- Inputs: Lead Ranking + Auto-SWOT çıktıları.
+- Outputs:
+  - Önerilen kanal
+  - Opening message
+  - CTA
+- Notlar:
+  - Sadece taslak üretimi yapılır.
+  - Gönderim, zamanlama ve otomasyon Outreach modülünün sorumluluğundadır.
+
+### 15. Auto-Sales Entry Strategy (v1) ✅
+- Amaç: Lead için en uygun satış giriş stratejisini (angle + gerekçe) üretmek.
+- Inputs:
+  - Lead Ranking sonucu
+  - Auto-SWOT özeti (varsa)
+  - Enrichment snapshot (deterministic sample)
+- Outputs (strict JSON):
+  - `entry_angle`
+  - `why_this_angle`
+  - `recommended_tone`
+  - `risk_flags`
+- Notlar:
+  - LLM opt-in: `GODMODE_AI_SALES_ENTRY_STRATEGY=1`
+  - Kapalıysa deterministik fallback stratejisi kullanılır.
+  - Çıktı `ai_artifacts` tablosuna `sales_entry_strategy_v1` tipiyle yazılır.
+  - İlgili event’ler:
+    - `AI_SALES_ENTRY_STRATEGY_GENERATED`
+    - `AI_SALES_ENTRY_STRATEGY_PERSISTED`
+
+⸻
+
+## 📦 Persistence & Observability
+
+- Tüm AI çıktıları `ai_artifacts` tablosuna kalıcı olarak yazılır.
+- Job-level izlenebilirlik `godmode_job_logs` üzerinden sağlanır.
+- Önemli event türleri:
+  - `AI_LEAD_RANKED`
+  - `AI_AUTO_SWOT_GENERATED`
+  - `AI_OUTREACH_DRAFT_GENERATED`
+  - `*_DONE` (summary)
+- Full smoke test, persistence ve determinism için release gate görevi görür.
+
+⸻
+
+## 🧪 Test Stratejisi
+
+- **Mini Smoke:** `./scripts/smoke_godmode_min.sh`
+  - Hızlı iterasyon içindir.
+  - Release gate değildir.
+- **Full Smoke:** `./scripts/smoke_test.sh`
+  - FAZ geçişlerinden önce zorunlu olarak yeşil olmalıdır.
+  - Deep enrichment opsiyoneldir:
+    - Worker çalışmıyorsa veya candidate=0 ise smoke test WARN + SKIP üretir.
+    - Worker çalışıyorsa persistence (V2 veya legacy) zorunlu olarak doğrulanır.
+- `last_discovery_job_id` doğrulaması, full smoke içinde **final discovery run**
+  (örn. JOB_ID_3) üzerinden yapılır.
+
+⸻
 
 ## 🔁 Deep Enrichment (Manuel Çalıştırma)
 

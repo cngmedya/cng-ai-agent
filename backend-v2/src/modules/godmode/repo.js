@@ -112,6 +112,7 @@ function getLatestLeadEnrichmentByLeadId(leadId) {
  * Canonical key: provider + provider_id (örn: google_places + place_id)
  */
 function upsertPotentialLead({
+  jobId,
   provider,
   provider_id,
   name,
@@ -133,7 +134,8 @@ function upsertPotentialLead({
         id,
         first_seen_at,
         last_seen_at,
-        scan_count
+        scan_count,
+        raw_payload_json
       FROM potential_leads
       WHERE provider = ?
         AND provider_id = ?
@@ -157,17 +159,66 @@ function upsertPotentialLead({
       id: existing.id,
       last_seen_at: now,
       updated_at: now,
-      raw_payload_json: JSON.stringify({
-        ...(raw_payload || {}),
-        _merge: {
-          canonical_key: canonical_key || null,
-          provider_count:
-            typeof provider_count === 'number' ? provider_count : null,
-          source_confidence:
-            typeof source_confidence === 'number' ? source_confidence : null,
-          sources: Array.isArray(sources) ? sources : null,
-        },
-      }),
+      raw_payload_json: JSON.stringify((() => {
+        const prev = safeParseJson(existing.raw_payload_json, {});
+        const prevObj = prev && typeof prev === 'object' ? prev : {};
+        const prevMerge =
+          prevObj && typeof prevObj._merge === 'object' && prevObj._merge
+            ? prevObj._merge
+            : {};
+
+        const base = {
+          ...prevObj,
+          ...(raw_payload || {}),
+        };
+
+        // Begin: Accept last_discovery_job_id from raw_payload._merge if present
+        const payloadMerge =
+          raw_payload &&
+          typeof raw_payload === 'object' &&
+          raw_payload._merge &&
+          typeof raw_payload._merge === 'object'
+            ? raw_payload._merge
+            : null;
+
+        const payloadLastDiscoveryJobId =
+          payloadMerge && payloadMerge.last_discovery_job_id
+            ? payloadMerge.last_discovery_job_id
+            : null;
+        // End: Accept last_discovery_job_id from raw_payload._merge if present
+
+        return {
+          ...base,
+          _merge: {
+            ...prevMerge,
+            last_discovery_job_id:
+              payloadLastDiscoveryJobId ||
+              jobId ||
+              prevMerge.last_discovery_job_id ||
+              null,
+            discovered_at: now,
+            source: 'godmode',
+            canonical_key: canonical_key || prevMerge.canonical_key || null,
+            provider_count:
+              typeof provider_count === 'number'
+                ? provider_count
+                : typeof prevMerge.provider_count === 'number'
+                  ? prevMerge.provider_count
+                  : null,
+            source_confidence:
+              typeof source_confidence === 'number'
+                ? source_confidence
+                : typeof prevMerge.source_confidence === 'number'
+                  ? prevMerge.source_confidence
+                  : null,
+            sources: Array.isArray(sources)
+              ? sources
+              : Array.isArray(prevMerge.sources)
+                ? prevMerge.sources
+                : null,
+          },
+        };
+      })()),
     });
 
     return {
@@ -175,6 +226,9 @@ function upsertPotentialLead({
       deduped: true,
       last_seen_at_before: existing.last_seen_at || null,
       last_seen_at_after: now,
+      is_new: false,
+      scan_count_before: typeof existing.scan_count === 'number' ? existing.scan_count : null,
+      scan_count_after: (typeof existing.scan_count === 'number' ? existing.scan_count : 0) + 1,
     };
   }
 
@@ -218,6 +272,16 @@ function upsertPotentialLead({
       raw_payload_json: JSON.stringify({
         ...(raw_payload || {}),
         _merge: {
+          discovered_at: now,
+          source: 'godmode',
+          last_discovery_job_id:
+            (raw_payload &&
+            typeof raw_payload === 'object' &&
+            raw_payload._merge &&
+            typeof raw_payload._merge === 'object' &&
+            raw_payload._merge.last_discovery_job_id
+              ? raw_payload._merge.last_discovery_job_id
+              : null) || jobId || null,
           canonical_key: canonical_key || null,
           provider_count:
             typeof provider_count === 'number' ? provider_count : null,
@@ -238,6 +302,9 @@ function upsertPotentialLead({
     deduped: false,
     last_seen_at_before: null,
     last_seen_at_after: now,
+    is_new: true,
+    scan_count_before: 0,
+    scan_count_after: 1,
   };
 }
 
@@ -517,6 +584,7 @@ function getJobById(id) {
 /**
  * Job event log append (1.G.5)
  */
+
 function appendJobLog(jobId, eventType, payload) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -542,6 +610,170 @@ function appendJobLog(jobId, eventType, payload) {
     payload_json: payload ? JSON.stringify(payload) : null,
     created_at: now,
   });
+}
+
+/**
+ * AI Artifacts (read-only persistence layer)
+ * Table (expected):
+ *   ai_artifacts(
+ *     id INTEGER PRIMARY KEY AUTOINCREMENT,
+ *     job_id TEXT,
+ *     lead_id INTEGER,
+ *     provider TEXT,
+ *     provider_id TEXT,
+ *     artifact_type TEXT,
+ *     artifact_json TEXT,
+ *     created_at TEXT
+ *   )
+ *
+ * NOTE:
+ * - Table is introduced via migration in FAZ 3.C.2.
+ * - Repo calls are best-effort: if table is missing, we return ok:false and do not throw.
+ */
+
+function insertAiArtifact({
+  jobId,
+  leadId,
+  provider,
+  providerId,
+  artifactType,
+  artifact,
+}) {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  try {
+    db.prepare(
+      `
+      INSERT INTO ai_artifacts (
+        job_id,
+        lead_id,
+        provider,
+        provider_id,
+        artifact_type,
+        artifact_json,
+        created_at
+      )
+      VALUES (
+        @job_id,
+        @lead_id,
+        @provider,
+        @provider_id,
+        @artifact_type,
+        @artifact_json,
+        @created_at
+      )
+    `,
+    ).run({
+      job_id: jobId || null,
+      lead_id: typeof leadId === 'number' ? leadId : null,
+      provider: provider || null,
+      provider_id: providerId || null,
+      artifact_type: artifactType,
+      artifact_json: artifact ? JSON.stringify(artifact) : null,
+      created_at: now,
+    });
+
+    return { ok: true, created_at: now };
+  } catch (e) {
+    const msg = e && (e.message || String(e));
+    if (msg && msg.toLowerCase().includes('no such table')) {
+      return { ok: false, reason: 'AI_ARTIFACTS_TABLE_MISSING' };
+    }
+    return { ok: false, reason: 'AI_ARTIFACTS_INSERT_FAILED', error: msg };
+  }
+}
+
+function getLatestAiArtifactByLeadId(leadId, artifactType) {
+  const db = getDb();
+
+  try {
+    const row = db
+      .prepare(
+        `
+        SELECT
+          id,
+          job_id,
+          lead_id,
+          provider,
+          provider_id,
+          artifact_type,
+          artifact_json,
+          created_at
+        FROM ai_artifacts
+        WHERE lead_id = ?
+          AND artifact_type = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      )
+      .get(leadId, artifactType);
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      job_id: row.job_id,
+      lead_id: row.lead_id,
+      provider: row.provider,
+      provider_id: row.provider_id,
+      artifact_type: row.artifact_type,
+      artifact: safeParseJson(row.artifact_json, null),
+      created_at: row.created_at,
+    };
+  } catch (e) {
+    const msg = e && (e.message || String(e));
+    if (msg && msg.toLowerCase().includes('no such table')) {
+      return null;
+    }
+    return null;
+  }
+}
+
+function listAiArtifactsByJobId(jobId, artifactType, limit) {
+  const db = getDb();
+  const lim =
+    typeof limit === 'number' && limit > 0 ? Math.floor(limit) : 50;
+
+  try {
+    const rows = db
+      .prepare(
+        `
+        SELECT
+          id,
+          job_id,
+          lead_id,
+          provider,
+          provider_id,
+          artifact_type,
+          artifact_json,
+          created_at
+        FROM ai_artifacts
+        WHERE job_id = ?
+          AND artifact_type = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+      `,
+      )
+      .all(jobId, artifactType, lim);
+
+    return (rows || []).map((r) => ({
+      id: r.id,
+      job_id: r.job_id,
+      lead_id: r.lead_id,
+      provider: r.provider,
+      provider_id: r.provider_id,
+      artifact_type: r.artifact_type,
+      artifact: safeParseJson(r.artifact_json, null),
+      created_at: r.created_at,
+    }));
+  } catch (e) {
+    const msg = e && (e.message || String(e));
+    if (msg && msg.toLowerCase().includes('no such table')) {
+      return [];
+    }
+    return [];
+  }
 }
 
 function safeParseJson(text, fallback) {
@@ -584,8 +816,18 @@ function upsertDeepEnrichmentIntoPotentialLead({
   }
 
   const raw = safeParseJson(row.raw_payload_json, {});
+  const existingMerge = raw && typeof raw === 'object' ? raw._merge || null : null;
+
   const next = {
-    ...raw,
+    ...(raw && typeof raw === 'object' ? raw : {}),
+    _merge: {
+      ...(existingMerge && typeof existingMerge === 'object' ? existingMerge : {}),
+      // Never lose discovery job binding; if missing, best-effort default to current jobId
+      last_discovery_job_id:
+        existingMerge && typeof existingMerge === 'object' && existingMerge.last_discovery_job_id
+          ? existingMerge.last_discovery_job_id
+          : jobId || null,
+    },
     _deep_enrichment: {
       ...(raw && raw._deep_enrichment ? raw._deep_enrichment : {}),
       ...enrichment,
@@ -593,7 +835,7 @@ function upsertDeepEnrichmentIntoPotentialLead({
       provider,
       provider_id: providerId,
       persisted_at: new Date().toISOString(),
-      version: 'v1.1.3',
+      version: 'v1.1.4',
     },
   };
 
@@ -878,4 +1120,7 @@ module.exports = {
   upsertDeepEnrichmentIntoPotentialLead,
   insertLeadEnrichmentSnapshot,
   getLatestLeadEnrichmentByLeadId,
+  insertAiArtifact,
+  getLatestAiArtifactByLeadId,
+  listAiArtifactsByJobId,
 };

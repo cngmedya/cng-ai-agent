@@ -238,6 +238,51 @@ Diğer modüller genel olarak mevcut mimari içinde çalışır durumdadır; ayr
 
 ## 6. Geliştirme Prensipleri
 
+## Smoke Test Politikası (Mini vs Full)
+
+Bu projede iki seviyeli smoke test standardı uygulanır. Amaç; küçük değişikliklerde hızlı ilerlerken, büyük değişikliklerde sistem genelinde regresyon riskini kontrol altında tutmaktır.
+
+### 1) Mini Smoke (Hızlı Doğrulama — 20–60 sn)
+Amaç: Küçük değişikliklerde kritik zincirin kırılmadığını hızlıca kanıtlamak.
+
+- Script: `./scripts/smoke_godmode_min.sh`
+- Kanıtladığı zincir:
+  1) API ayakta (admin status)
+  2) Providers health
+  3) GODMODE job create + run
+  4) DB write: `AI_LEAD_RANKED` ve `AI_LEAD_RANKING_DONE`
+
+Ne zaman koşturulur:
+- Prompt / schema değişiklikleri
+- Küçük service veya repo düzeltmeleri
+- Job log / metric eklemeleri
+- Lokal iterasyon ve hızlı deneme adımları
+
+Mini smoke, sistemin tamamını değil; **kritik ana akışın çalıştığını** kanıtlar.
+
+---
+
+### 2) Full Smoke (Release Gate — Uzun Test)
+Amaç: Sistem genelinde regresyon olmadığını doğrulamak.
+
+- Script: `./scripts/smoke_test.sh`
+
+Ne zaman **zorunlu**:
+- Migration veya DB schema değişikliği
+- Worker / queue zinciri değişikliği
+- ProvidersRunner veya discovery pipeline büyük değişiklikleri
+- `shared/*` klasörü (özellikle `shared/ai/llmClient.js`) değişiklikleri
+- Birden fazla modülü etkileyen refactor
+- PR öncesi veya gün sonu “release check”
+
+---
+
+### Kural ve Disiplin
+- Mini smoke, **hızlı lokal doğrulama** içindir.
+- Full smoke, **release ve büyük değişiklik doğrulaması**dır.
+- Mini smoke geçti diye full smoke **atlanmaz**.
+- Hangi testin koşulacağı, yapılan değişikliğin kapsamına göre belirlenir.
+
 Backend V2 için bazı sabit prensipler:
 
 1. **Modülerlik**

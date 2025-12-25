@@ -695,6 +695,41 @@ async function processDeepEnrichmentBatch({ jobId, ids = [], sources = [] }) {
   return { processed };
 }
 
+// Key scoring signal normalization for provider leads
+function toNumberOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeProviderLead(providerId, lead) {
+  const l = lead && typeof lead === 'object' ? lead : {};
+
+  const rating = toNumberOrNull(l.rating);
+  const userRatingsTotal =
+    toNumberOrNull(
+      l.user_ratings_total ??
+        l.userRatingsTotal ??
+        l.user_ratings_count ??
+        l.userRatingsCount ??
+        l.review_count ??
+        l.reviews_count,
+    );
+
+  const websiteRaw = l.website ?? l.site ?? l.url ?? null;
+  const website =
+    typeof websiteRaw === 'string' && websiteRaw.trim().length > 0
+      ? websiteRaw.trim()
+      : null;
+
+  return {
+    ...l,
+    provider: l.provider || providerId,
+    rating,
+    user_ratings_total: userRatingsTotal,
+    website,
+  };
+}
+
 async function runDiscoveryProviders(criteria) {
   const leads = [];
   const providersUsed = [];
@@ -772,7 +807,7 @@ async function runDiscoveryProviders(criteria) {
     }
 
     if (Array.isArray(res?.leads)) {
-      leads.push(...res.leads);
+      leads.push(...res.leads.map((l) => normalizeProviderLead(providerId, l)));
     }
   }
 
