@@ -1,6 +1,6 @@
 
 # GODMODE Discovery Engine — ROADMAP (v1.1.11)
-> Current focus: FAZ 3.E — Next Brain Artifact (post‑3.D)
+> Current focus: FAZ 3.E.2 — Channel Strategy Intelligence (v1)
 
 Bu dosya, CNG AI Agent içerisinde yer alan **GODMODE Discovery Engine** modülünün full gelişim yol haritasıdır.  
 Her aşama production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan maddeler işaretlenerek ilerleme takip edilir.
@@ -738,8 +738,6 @@ Discovery sonuçlarının otomatik analiz edilmesi.
   - [x] LLM kapalıyken deterministik fallback ile çalışır
   - [x] LLM açıkken strict JSON schema ile validate edilir
   - [x] DB kanıtı: job log + `ai_artifacts(sales_entry_strategy_v1) >= 1`
-# 3.E — Next Brain Artifact (Decision Phase)
-
 ## **3.E — Next Brain Artifact (Decision Phase)**
 
 Bu faz, FAZ 3’ün **karar noktasıdır**.  
@@ -762,13 +760,25 @@ Yeni bir prompt dosyası açmadan önce durmak, sistemi tartmak ve *bir sonraki*
 
 Bu adım geçilmeden **hiçbir yeni AI dosyası açılmaz**.
 
-- [ ] Tek bir “brain artifact” seçilir
-- [ ] Artifact’ın *neden gerekli olduğu* netleştirilir
-- [ ] Girdi seti tanımlanır  
-  (ranking + SWOT + enrichment + discovery metadata)
-- [ ] Çıktı contract’ı (strict JSON) tasarlanır
-- [ ] Definition of Done (DoD) yazılır
-- [ ] Full smoke test geçiş şartı belirlenir
+- [x] **Seçilen brain artifact:** Channel Strategy Intelligence (v1)
+- [x] **Neden:** Outreach execution’a geçmeden önce “nereden yazacağız?” kararını deterministik + AI destekli hale getirmek (yanlış kanal = 0 reply).
+- [x] **Girdi seti (v1):**
+  - [x] Lead Ranking (band/priority_score)
+  - [x] Auto‑SWOT özeti (varsa)
+  - [x] Enrichment snapshot (website var/yok + sosyal sinyaller + business_type)
+  - [x] Sales Entry Strategy (tone/angle)
+- [x] **Çıktı contract (strict JSON) (v1):**
+  - [x] `primary_channel` (enum: `email|whatsapp|instagram|linkedin|phone`)
+  - [x] `fallback_channels[]` (enum list)
+  - [x] `channel_reasoning` (string)
+  - [x] `confidence` (enum: `low|medium|high`)
+- [x] **LLM opt‑in:** `GODMODE_AI_CHANNEL_STRATEGY=1` (kapalıyken deterministik heuristic fallback)
+- [x] **Persistence:** `ai_artifacts` (`artifact_type='channel_strategy_v1'`)
+- [x] **Observability (event’ler):**
+  - [x] `AI_CHANNEL_STRATEGY_GENERATED`
+  - [x] `AI_CHANNEL_STRATEGY_PERSISTED`
+  - [x] `AI_CHANNEL_STRATEGY_PERSIST_ERROR` (negatif kanıt; olmamalı)
+- [x] **DoD / Gate:** Mini smoke (iterasyon) + Full smoke (faz geçiş şartı)
 
 ---
 
@@ -778,7 +788,7 @@ Bu listeden **yalnızca biri** seçilip uygulanacaktır:
 
 - [ ] **Follow‑up Timing / Cadence**
   - “Bu lead’e ne zaman tekrar yazmalıyız?”
-- [ ] **Channel Strategy Intelligence**
+- [x] **Channel Strategy Intelligence (SELECTED)**
   - “İlk temas için ideal kanal + alternatif plan”
 - [ ] **Deal Probability / Win Likelihood**
   - “Bu lead’in satışa dönüşme ihtimali”
