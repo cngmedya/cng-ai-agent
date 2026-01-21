@@ -3,15 +3,190 @@ const {
   healthCheckGooglePlaces,
 } = require('./googlePlacesProvider');
 
+function getDiscoveryMode() {
+  const raw = String(process.env.GODMODE_DISCOVERY_MODE || '').trim().toLowerCase();
+
+  // Backward compatible:
+  // 0 = MOCK/REPLAY (no external calls)
+  // 1 = LIVE (real Google Places)
+  if (raw === '0') return 'replay';
+  if (raw === '1') return 'live';
+
+  // Extended aliases
+  if (raw === 'mock' || raw === 'replay') return 'replay';
+  if (raw === 'live' || raw === 'real') return 'live';
+
+  // Default: safe-by-default (treat as replay when not explicitly set)
+  return 'replay';
+}
+
 const { getDb } = require('../../../core/db');
 
 const { extractSeoSignalsFromHtml } = require('../workers/dataFeederWorker');
+
+function mapReplayLeadRow(row) {
+  const safe = row && typeof row === 'object' ? row : {};
+
+  let raw = null;
+  try {
+    raw = safe.raw_payload_json ? JSON.parse(safe.raw_payload_json) : null;
+  } catch (_) {
+    raw = null;
+  }
+
+  const website =
+    typeof safe.website === 'string' && safe.website.trim().length > 0
+      ? safe.website.trim()
+      : null;
+
+  const name =
+    typeof safe.name === 'string' && safe.name.trim().length > 0
+      ? safe.name.trim()
+      : raw?.name || raw?.title || null;
+
+  const rating = safe.rating ?? raw?.rating ?? null;
+  const user_ratings_total =
+    safe.user_ratings_total ?? raw?.user_ratings_total ?? raw?.userRatingsTotal ?? null;
+
+  const google_place_id =
+    safe.google_place_id || safe.provider_id || raw?.place_id || raw?.placeId || null;
+
+  return {
+    provider: 'google_places',
+    google_place_id,
+    name,
+    rating,
+    user_ratings_total,
+    website,
+    raw,
+  };
+}
+
+function normalizeCategoryToken(v) {
+  return String(v || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[ıİ]/g, 'i')
+    .replace(/[şŞ]/g, 's')
+    .replace(/[ğĞ]/g, 'g')
+    .replace(/[üÜ]/g, 'u')
+    .replace(/[öÖ]/g, 'o')
+    .replace(/[çÇ]/g, 'c');
+}
+
+function mapCriteriaCategoriesToGoogleTypes(categories) {
+  const input = Array.isArray(categories) ? categories : [];
+  const out = [];
+
+  for (const c of input) {
+    const n = normalizeCategoryToken(c);
+
+    if (!n) continue;
+
+    // Minimal TR -> Google Places type mappings used by smoke tests
+    if (n.includes('mimarlik')) out.push('architect');
+    if (n.includes('nakliyat')) out.push('moving_company');
+    if (n.includes('oto') && n.includes('tamir')) out.push('car_repair');
+    if (n.includes('hali') && n.includes('yikama')) out.push('laundry');
+    if (n.includes('tesisat')) out.push('plumber');
+
+    // Allow already-google-type inputs to pass through
+    if (/^[a-z0-9_]+$/.test(n) && !out.includes(n)) out.push(n);
+  }
+
+  return Array.from(new Set(out));
+}
+
+async function runGooglePlacesDiscoveryReplay(criteria) {
+  const db = getDb();
+
+  const limitRaw = criteria?.limit ?? criteria?.take ?? criteria?.maxResults ?? null;
+  const limit = Number.isFinite(Number(limitRaw)) ? Math.max(1, Math.min(50, Number(limitRaw))) : 10;
+
+  const mappedTypes = mapCriteriaCategoriesToGoogleTypes(criteria?.categories);
+
+  const whereParts = [`provider = 'google_places'`];
+  const params = [];
+
+  if (Array.isArray(mappedTypes) && mappedTypes.length > 0) {
+    whereParts.push(`category IN (${mappedTypes.map(() => '?').join(', ')})`);
+    params.push(...mappedTypes);
+  }
+
+  const sql = `
+      SELECT *
+      FROM potential_leads
+      WHERE ${whereParts.join(' AND ')}
+      ORDER BY datetime(created_at) DESC
+      LIMIT ?
+    `;
+
+  params.push(limit);
+
+  let rows = db.prepare(sql).all(...params);
+
+  if (Array.isArray(mappedTypes) && mappedTypes.length > 0 && Array.isArray(rows) && rows.length === 0) {
+    const sqlFallback = `
+      SELECT *
+      FROM potential_leads
+      WHERE provider = 'google_places'
+      ORDER BY datetime(created_at) DESC
+      LIMIT ?
+    `;
+
+    rows = db.prepare(sqlFallback).all(limit);
+  }
+
+  const leads = Array.isArray(rows) ? rows.map(mapReplayLeadRow) : [];
+
+  return {
+    ok: true,
+    leads,
+    used_categories:
+      Array.isArray(mappedTypes) && mappedTypes.length > 0
+        ? mappedTypes
+        : Array.isArray(criteria?.categories)
+          ? criteria.categories
+          : [],
+    mode: 'replay',
+    source: 'db.potential_leads',
+    limit,
+  };
+}
+
+async function healthCheckGooglePlacesReplay() {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `
+      SELECT COUNT(1) AS c
+      FROM potential_leads
+      WHERE provider = 'google_places'
+    `,
+    )
+    .get();
+
+  const c = Number(row?.c || 0);
+
+  return {
+    ok: c > 0,
+    meta: {
+      source: 'db.potential_leads',
+      count: c,
+    },
+  };
+}
 
 const PROVIDERS = {
   google_places: {
     id: 'google_places',
     run: runGooglePlacesDiscovery,
     healthCheck: healthCheckGooglePlaces,
+  },
+  google_places_replay: {
+    id: 'google_places_replay',
+    run: runGooglePlacesDiscoveryReplay,
+    healthCheck: healthCheckGooglePlacesReplay,
   },
 };
 
@@ -21,12 +196,21 @@ const PROVIDER_RATE_LIMIT_CONFIG = {
     initialBackoffMs: 3000,
     maxBackoffMs: 60000,
   },
+  google_places_replay: {
+    initialBackoffMs: 500,
+    maxBackoffMs: 5000,
+  },
 };
 
 const providerRateState = {
   google_places: {
     nextAllowedAt: 0,
     backoffMs: PROVIDER_RATE_LIMIT_CONFIG.google_places.initialBackoffMs,
+    lastError: null,
+  },
+  google_places_replay: {
+    nextAllowedAt: 0,
+    backoffMs: PROVIDER_RATE_LIMIT_CONFIG.google_places_replay.initialBackoffMs,
     lastError: null,
   },
 };
@@ -738,17 +922,31 @@ async function runDiscoveryProviders(criteria) {
   const providerSkipDetails = {};
   const providerErrors = [];
 
-  const channels = Array.isArray(criteria?.channels)
-    ? criteria.channels
-    : ['google_places'];
+  const channels =
+    Array.isArray(criteria?.channels) && criteria.channels.length > 0
+      ? criteria.channels
+      : ['google_places'];
 
-  const selectedProviders = channels.map((c) => PROVIDERS[c]).filter(Boolean);
+  const mode = getDiscoveryMode();
+
+  const resolvedChannels = channels.map((c) => {
+    if (c === 'google_places' && mode === 'replay') return 'google_places_replay';
+    return c;
+  });
+
+  const selectedProviders =
+    mode === 'replay'
+      ? [PROVIDERS.google_places_replay].filter(Boolean)
+      : resolvedChannels.map((c) => PROVIDERS[c]).filter(Boolean);
 
   const parallel = criteria?.parallel !== false;
 
   const tasks = selectedProviders.map((p) =>
     withProviderBackoff(p.id, () => p.run(criteria), {
-      bypassRateLimit: criteria?.bypassRateLimit === true,
+      bypassRateLimit:
+        criteria?.bypassRateLimit === true ||
+        p.id === 'google_places_replay' ||
+        mode === 'replay',
     }).then((out) => ({ providerId: p.id, out })),
   );
 
@@ -838,24 +1036,34 @@ module.exports = {
 };
 
 async function healthCheckProviders(options) {
-  const channels = Array.isArray(options?.channels)
-    ? options.channels
-    : ['google_places'];
+  const channels =
+    Array.isArray(options?.channels) && options.channels.length > 0
+      ? options.channels
+      : ['google_places'];
+
+  const mode = getDiscoveryMode();
+
+  const resolvedChannels = channels.map((c) => {
+    if (c === 'google_places' && mode === 'replay') return 'google_places_replay';
+    return c;
+  });
 
   const providers = {};
   const results = [];
 
-  if (channels.includes('google_places')) {
+  if (resolvedChannels.includes('google_places') || resolvedChannels.includes('google_places_replay')) {
     const startedAt = Date.now();
 
     try {
-      const hc = PROVIDERS.google_places?.healthCheck;
+      const hcProviderId = resolvedChannels.includes('google_places_replay') ? 'google_places_replay' : 'google_places';
+      const hc = PROVIDERS[hcProviderId]?.healthCheck;
       if (typeof hc !== 'function') {
         throw new Error('healthCheckGooglePlaces_not_implemented');
       }
 
-      const hcRun = await withProviderBackoff('google_places', () => hc(options), {
-        bypassRateLimit: options?.bypassRateLimit === true,
+      const hcRun = await withProviderBackoff(hcProviderId, () => hc(options), {
+        bypassRateLimit:
+          options?.bypassRateLimit === true || hcProviderId === 'google_places_replay',
       });
 
       if (hcRun?.skipped === true) {
@@ -870,17 +1078,18 @@ async function healthCheckProviders(options) {
       const res = hcRun.res;
       const latencyMs = Date.now() - startedAt;
 
-      providers.google_places = {
+      providers[hcProviderId] = {
         ok: res?.ok === true,
         latencyMs,
         meta: res?.meta || {},
       };
 
-      results.push(providers.google_places);
+      results.push(providers[hcProviderId]);
     } catch (err) {
       const latencyMs = Date.now() - startedAt;
-
-      providers.google_places = {
+      // Use same logic to determine provider id
+      const hcProviderId = resolvedChannels.includes('google_places_replay') ? 'google_places_replay' : 'google_places';
+      providers[hcProviderId] = {
         ok: false,
         latencyMs,
         error: {
@@ -891,7 +1100,7 @@ async function healthCheckProviders(options) {
         },
       };
 
-      results.push(providers.google_places);
+      results.push(providers[hcProviderId]);
     }
   }
 

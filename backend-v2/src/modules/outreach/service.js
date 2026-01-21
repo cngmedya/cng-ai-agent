@@ -1,5 +1,5 @@
 // backend-v2/src/modules/outreach/service.js
-const { getLeadById } = require('./repo');
+const { getLeadById, enqueueOutreach } = require('./repo');
 const { chatJson } = require('../../shared/ai/llmClient');
 const { loadPrompt } = require('../../shared/ai/promptLoader');
 const { analyzeLead } = require('../intel/service');
@@ -120,6 +120,26 @@ async function generateSequenceForLead({
   const ai_context = payload.ai_context || null;
   const sequence = payload.sequence || [];
 
+  // enqueue outreach execution intents (queue-only at this layer)
+  for (const step of sequence) {
+    if (!step || !step.message) continue;
+
+    enqueueOutreach({
+      jobId: intelResult.job_id || null,
+      leadId: lead.id,
+      provider: lead.provider || null,
+      providerId: String(lead.provider_id || ''),
+      channel: safeChannel,
+      priority: step.priority || 0,
+      payload: {
+        to: lead.email || null,
+        subject: step.subject || null,
+        message: step.message,
+        step_type: step.type || 'initial',
+      },
+    });
+  }
+
   return {
     lead_id: lead.id,
     channel: safeChannel,
@@ -133,5 +153,6 @@ async function generateSequenceForLead({
 
 module.exports = {
   generateFirstContact,
-  generateSequenceForLead
+  generateSequenceForLead,
+  enqueueOutreach
 };

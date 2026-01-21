@@ -1,4 +1,4 @@
-# GODMODE Discovery Engine — v1.1.11
+# GODMODE Discovery Engine — v1.1.12
 Next-gen Omni-Data Discovery Pipeline
 
 GODMODE, CNG AI Agent ekosistemi içinde yer alan yüksek kapasiteli tarama, keşif ve zeka toplama motorudur.  
@@ -8,10 +8,10 @@ Faz 2 ile çok sağlayıcılı (multi-provider), paralel çalışan ve AI destek
 ---
 
 # ✔️ **Sürüm Bilgisi**
-- **Version:** `v1.1.11`
+- **Version:** `v1.1.12`
 - **Release Date:** 2025-12-25
 - **Status:** Production-grade stable (Faz 1–2 tamamlandı, Faz 3 aktif geliştirme)
-- **Next Target:** Faz 3.E — Next Brain Artifact
+- **Next Target:** Faz 4.D.2 — Policy Reason Standardization
 
 ---
 
@@ -104,7 +104,9 @@ godmode/
 │   ├── outreachDraft.prompt.js
 │   ├── outreachDraft.schema.js
 │   ├── salesEntryStrategy.prompt.js
-│   └── salesEntryStrategy.schema.js
+│   ├── salesEntryStrategy.schema.js
+│   ├── channelStrategy.prompt.js
+│   └── channelStrategy.schema.js
 │
 ├── repo.js                 → DB access layer
 ├── service.js              → Job management + business logic
@@ -236,6 +238,47 @@ GET /api/godmode/jobs/:id/logs/deep-enrichment
 
 ⸻
 
+## 🧱 Boundary Rules — What GODMODE Is / Is Not
+
+Bu bölüm, GODMODE modülünün **sorumluluk sınırlarını** netleştirmek için eklenmiştir.
+Amaç; modül şişmesini, sorumluluk çakışmalarını ve uzun vadeli mimari bozulmayı önlemektir.
+
+### GODMODE NEDİR
+GODMODE:
+- Potansiyel firmaları (lead) **keşfeder**
+- Normalize eder ve enrichment sinyallerini toplar
+- Lead’ler için **karar destek çıktıları (decision artifacts)** üretir
+- Şu sorulara cevap verir:
+  - Bu lead değerli mi?
+  - Ne zaman temas edilmeli?
+  - Hangi kanal daha mantıklı?
+  - Nasıl bir giriş stratejisi izlenmeli?
+
+### GODMODE NE DEĞİLDİR
+GODMODE:
+- ❌ Gerçek mesaj göndermez (email / whatsapp / dm)
+- ❌ SMTP, provider credential veya retry logic içermez
+- ❌ Bounce, unsubscribe, complaint veya delivery metrikleri yönetmez
+- ❌ Derin rapor (PDF, CIR, tam SWOT dosyası) üretmez
+
+### Karar vs. İcra Ayrımı (Altın Kural)
+- **GODMODE = Decision Brain**
+- **Intel / Research = Deep Intelligence**
+- **Outreach / Email / WhatsApp = Execution**
+
+GODMODE yalnızca **niyet (intent)** ve **taslak (draft)** üretir.
+Gerçek icra, ilgili execution modüllerine devredilir.
+
+### Tasarım Prensibi
+GODMODE içindeki tüm AI çıktıları:
+- Lead-level **hafif ve hızlı** olmalıdır
+- Pipeline’ı tetikleyen karar verisi niteliği taşır
+- `ai_artifacts` ve `job_logs` ile izlenebilir olmalıdır
+- Hiçbir zaman execution sorumluluğu üstlenmez
+
+Bu sınırlar, ileride yeni kanal veya modül eklenirken
+mevcut mimarinin **bozulmaması için bağlayıcıdır**.
+
 ## 🧠 Faz 3 — AI Decision Layer (Brain Integration)
 
 GODMODE artık yalnızca veri toplayan bir discovery motoru değil, aynı zamanda
@@ -295,6 +338,98 @@ GODMODE artık yalnızca veri toplayan bir discovery motoru değil, aynı zamand
     - `AI_SALES_ENTRY_STRATEGY_GENERATED`
     - `AI_SALES_ENTRY_STRATEGY_PERSISTED`
 
+### 16. Channel Strategy Intelligence (v1) ✅
+- Amaç: Lead için **ilk temasın hangi kanaldan** yapılacağını belirlemek.
+- Inputs:
+  - Lead Ranking (band, priority_score)
+  - Auto-SWOT özeti (varsa)
+  - Enrichment snapshot (website var/yok, sosyal sinyaller)
+  - Sales Entry Strategy çıktısı
+- Outputs (strict JSON):
+  - `primary_channel` (email | whatsapp | instagram | linkedin | phone)
+  - `fallback_channels[]`
+  - `channel_reasoning`
+  - `confidence` (low | medium | high)
+- Çalışma Kuralları:
+  - LLM opt-in: `GODMODE_AI_CHANNEL_STRATEGY=1`
+  - Kapalıysa deterministik heuristic fallback kullanılır.
+  - Sadece A/B band lead’ler için üretilir.
+- Persistence:
+  - `ai_artifacts` → `channel_strategy_v1`
+- Event’ler:
+  - `AI_CHANNEL_STRATEGY_GENERATED`
+  - `AI_CHANNEL_STRATEGY_PERSISTED`
+  - `AI_CHANNEL_STRATEGY_DONE`
+- Test Kanıtı:
+  - Mini smoke: `smoke_godmode_min.sh` içinde 4.3 Channel Strategy assertion
+  - Full smoke: `smoke_test.sh` yeşil (faz geçiş gate)
+
+---
+
+## 🛡️ Faz 4.D — Outreach Execution Guardrails
+
+GODMODE, outreach sürecinde **yanlışlıkla veya erken mesaj gönderimini** önlemek için
+çok katmanlı guardrail mekanizmaları içerir. Bu faz, discovery ve AI kararlarının
+**kontrollü execution** ile buluşmasını sağlar.
+
+### 17. Execution Mode & Kill‑Switch (v1) ✅
+
+Amaç:
+- Gerçek mesaj gönderimini **bilinçli ve geri alınabilir** hale getirmek
+- Default davranışı her zaman **güvenli (stub / queue)** tutmak
+- Tüm execution denemelerini izlenebilir kılmak
+
+#### Execution Modes
+Execution davranışı ENV üzerinden belirlenir:
+
+```bash
+OUTREACH_EXECUTION_MODE=stub        # default, güvenli
+OUTREACH_EXECUTION_MODE=queue_only # sadece enqueue
+OUTREACH_EXECUTION_MODE=send_now   # guarded send stub
+OUTREACH_EXECUTION_MODE=schedule   # guarded schedule stub
+```
+
+Kurallar:
+- Varsayılan mod: `stub`
+- `send_now` ve `schedule` modlarında **gerçek gönderim yoktur**
+- Sadece **stub event** üretilir
+
+#### Kill‑Switch
+Gerçek execution tamamen kapatılabilir:
+
+```bash
+OUTREACH_EXECUTION_ENABLED=0
+```
+
+Bu durumda:
+- Hiçbir enqueue / send denenmez
+- Event:
+  - `OUTREACH_EXECUTION_BLOCKED_POLICY`
+  - Reason: `KILL_SWITCH`
+
+#### Observability
+Her hedef için execution attempt loglanır:
+
+- `OUTREACH_EXECUTION_ATTEMPT`
+  - provider
+  - provider_id
+  - execution_mode
+
+Stub event’leri:
+- `OUTREACH_SEND_STUB`
+- `OUTREACH_SCHEDULE_STUB`
+
+Policy block reason’ları:
+- `KILL_SWITCH`
+- `DAILY_CAP_REACHED`
+- `UNSUPPORTED_CHANNEL`
+- `MODE_NOT_IMPLEMENTED`
+
+#### Test Kanıtı
+- Mini smoke: `smoke_godmode_min.sh`
+  - Mode‑aware assertion (`OUTREACH_SEND_STUB`, `OUTREACH_SCHEDULE_STUB`)
+- Full smoke: `smoke_test.sh` (guardrails açıkken yeşil)
+
 ⸻
 
 ## 📦 Persistence & Observability
@@ -306,7 +441,8 @@ GODMODE artık yalnızca veri toplayan bir discovery motoru değil, aynı zamand
   - `AI_AUTO_SWOT_GENERATED`
   - `AI_OUTREACH_DRAFT_GENERATED`
   - `*_DONE` (summary)
-- Full smoke test, persistence ve determinism için release gate görevi görür.
+  - `AI_CHANNEL_STRATEGY_GENERATED`
+  - `AI_CHANNEL_STRATEGY_DONE`
 
 ⸻
 

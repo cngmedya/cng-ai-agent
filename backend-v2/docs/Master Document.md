@@ -171,7 +171,184 @@ Detaylar `docs/MODULES.md` içinde var; burada sadece **yüksek seviye harita**:
 
 ---
 
-## 4. Veri Modeli ve “Lead” Kavramı
+## 3.1 Modüller Arası Veri Kontratları (System Contract Map)
+
+Bu bölüm, **modüller arası sınırları netleştirmek**, GODMODE’un şişmesini önlemek ve
+her modülün **tek sorumluluk prensibi** ile çalışmasını garanti altına almak için eklenmiştir.
+
+Amaç:
+- “Bu veri nerede üretilir?”
+- “Kim tüketir?”
+- “Kim icra eder, kim sadece karar üretir?”
+sorularını **tek bakışta** cevaplamak.
+
+---
+
+### Ortak Çekirdek Kavramlar
+
+#### Lead (Tekil Gerçek)
+Sistemdeki **tek merkezli varlık**tır.
+
+- `lead_id` → tüm modüller arası bağlayıcı anahtar
+- Discovery / GODMODE yalnızca **lead üretir**
+- Intel / Research / Brain **lead’i zenginleştirir**
+- Outreach / Email / WhatsApp **lead üzerinde aksiyon alır**
+- CRM / LeadDashboard **lead’in zaman çizelgesini tutar**
+
+---
+
+#### Job (Pipeline Birimi)
+Özellikle GODMODE tarafında kullanılan, **izlenebilir işlem birimi**.
+
+- `job_id`
+- Job bazlı loglama, progress ve kanıt zinciri tutulur.
+- Job, **lead değildir**; lead üreten bir süreçtir.
+
+---
+
+#### Event Log (Kanıt Katmanı)
+Tüm kritik pipeline’lar için **kanıtlanabilirlik** sağlar.
+
+Her kritik akış şu zinciri üretmek zorundadır:
+1. **Count** (kaç adet iş/lead hedeflendi)
+2. **Queue** (iş kuyruğa alındı mı)
+3. **Worker** (iş gerçekten çalıştı mı)
+4. **Write** (DB’ye yazıldı mı)
+
+Bu zincir tamamlanmadan sistem “çalışıyor” kabul edilmez.
+
+---
+
+## Modül Bazlı Kontratlar
+
+### Discovery
+**Rol:** Hızlı / legacy lead keşfi  
+**Üretir:** Ham + normalize edilmiş lead adayları  
+**Yazar:** (opsiyonel) discovery tabanlı lead kayıtları  
+**İcra:** Yok  
+**Not:** GODMODE’un basit alternatifi
+
+---
+
+### GODMODE
+**Rol:** Omni‑provider discovery + karar artefaktları  
+**Üretir:**
+- Normalize edilmiş lead’ler
+- Discovery sinyalleri
+- Karar artefaktları (rank, kanal önerisi, outreach taslağı)
+
+**Yazar:**
+- `godmode_jobs`
+- `godmode_job_logs`
+- `potential_leads`
+
+**Kesin Kural:**
+- **Email / WhatsApp göndermez**
+- **Provider credential / retry / delivery yönetmez**
+
+**Tüketiciler:**
+- Intel / Research (derin analiz)
+- Outreach (sadece *intent* + taslak)
+
+---
+
+### Intel
+**Rol:** Website + SEO + dijital sinyal analizi  
+**Üretir:** Lead intelligence snapshot / rapor  
+**Yazar:** `lead_search_intel`, `lead_intel_reports`  
+**İcra:** Yok  
+**Tüketiciler:** Brain, Research, LeadDashboard
+
+---
+
+### Research (CIR)
+**Rol:** Derin pazar / rakip / sektör zekâsı  
+**Üretir:** CIR (CNG Intelligence Report)  
+**Yazar:** CIR rapor tabloları  
+**İcra:** Yok  
+**Tüketiciler:** Brain, CRM, LeadDashboard
+
+---
+
+### Brain
+**Rol:** Karar birleştirme ve stratejik özet  
+**Üretir:**
+- AI lead score
+- Fırsat / risk seviyesi
+- Önerilen aksiyonlar
+
+**Yazar:** Brain snapshot / özet kayıtları  
+**İcra:** Yok  
+**Tüketiciler:** CRM, Outreach, LeadDashboard
+
+---
+
+### CRM
+**Rol:** İnsan ilişkisi ve lifecycle yönetimi  
+**Üretir:** Notlar, durumlar, CRM brain özetleri  
+**Yazar:** `lead_crm_notes`, `lead_crm_status`, `lead_crm_brains`  
+**İcra:** İnsan destekli  
+**Tüketiciler:** Brain, LeadDashboard
+
+---
+
+### Outreach
+**Rol:** İletişim stratejisi ve orkestrasyon  
+**Üretir:** Mesaj içeriği + kanal stratejisi  
+**İcra:** **Hayır** (sadece hazırlar)  
+**Tüketiciler:** OutreachScheduler, Email, WhatsApp
+
+---
+
+### OutreachScheduler
+**Rol:** Zamanlama ve sekans yönetimi  
+**Üretir:** Enqueue / schedule planı  
+**İcra:** Worker tetikleme  
+**Tüketiciler:** Email / WhatsApp
+
+---
+
+### Email
+**Rol:** Email kanalının teknik icrası  
+**Üretir:** Gönderim sonucu, delivery log  
+**Yazar:** `email_logs`  
+**İcra:** **Evet (tek sorumlu)**
+
+---
+
+### WhatsApp
+**Rol:** WhatsApp kanalının teknik icrası  
+**Üretir:** Gönderim sonucu, delivery log  
+**Yazar:** `whatsapp_logs`  
+**İcra:** **Evet (tek sorumlu)**
+
+---
+
+### LeadDashboard
+**Rol:** Read‑model / birleşik görünüm  
+**Üretir:** Tek JSON “lead 360”  
+**Yazar:** Yazmaz (okur)  
+**İcra:** Yok
+
+---
+
+## Kritik Mimari Kural (Bağlayıcı)
+
+- GODMODE **keşfeder**, icra etmez  
+- Intel / Research **anlar**, icra etmez  
+- Brain **karar verir**, icra etmez  
+- Outreach **hazırlar**, icra etmez  
+- Email / WhatsApp **icra eder**  
+- CRM **insan temasını** yönetir  
+
+Bu sınırlar ihlal edilirse:
+- Modüller şişer
+- Roadmap anlamını kaybeder
+- Debug imkânsız hale gelir
+
+Bu kontrat, backend‑v2 için **bağlayıcı mimari sözleşme** olarak kabul edilir.
+
+---
 
 Sistemde her şeyin merkezinde **lead** kavramı var.
 Lead = “Potansiyel müşteri / şirket / proje”.

@@ -85,25 +85,38 @@ modules
 │   ├── routes.js
 │   └── service.js
 ├── godmode
-│   ├── api
-│   │   ├── controller.js
-│   │   └── routes.js
-│   ├── docs
-│   │   ├── GODMODE_ROADMAP.md
-│   │   └── GODMODE.md
-│   ├── pipeline
-│   │   └── discoveryPipeline.js
-│   ├── providers
-│   │   ├── googlePlacesProvider.js
-│   │   ├── index.js
-│   │   └── providersRunner.js
-│   ├── repo.js
-│   ├── service.js
-│   ├── validator.js
-│   └── workers
-│       ├── dataFeederWorker.js
-│       ├── economicAnalyzerWorker.js
-│       └── entityResolverWorker.js
+│   ├── api
+│   │   ├── controller.js
+│   │   └── routes.js
+│   ├── ai
+│   │   ├── autoSwot.prompt.js
+│   │   ├── autoSwot.schema.js
+│   │   ├── leadRanking.prompt.js
+│   │   ├── leadRanking.schema.js
+│   │   ├── outreachDraft.prompt.js
+│   │   ├── outreachDraft.schema.js
+│   │   ├── salesEntryStrategy.prompt.js
+│   │   └── salesEntryStrategy.schema.js
+│   ├── docs
+│   │   ├── GODMODE_ROADMAP.md
+│   │   └── GODMODE.md
+│   ├── pipeline
+│   │   └── discoveryPipeline.js
+│   ├── providers
+│   │   ├── googlePlacesProvider.js
+│   │   ├── index.js
+│   │   └── providersRunner.js
+│   ├── services
+│   │   ├── brain.service.js
+│   │   ├── outreachTrigger.service.js
+│   │   └── index.js
+│   ├── workers
+│   │   ├── dataFeederWorker.js
+│   │   ├── economicAnalyzerWorker.js
+│   │   └── entityResolverWorker.js
+│   ├── repo.js
+│   ├── service.js
+│   └── validator.js
 ├── intel
 │   ├── controller.js
 │   ├── docs
@@ -390,6 +403,21 @@ Brain modülü, sistemdeki tüm modüllerden toplanan sinyallerin birleşerek **
 GODMODE → Intel → Research → CRM → Outreach → LeadDashboard arasında köprü görevi görür.
 
 ### Çekirdek Sorumluluklar
+#### ❗ Sorumluluk Sınırı (Bağlayıcı)
+
+GODMODE **icra eden bir modül değildir**.
+
+- Email / WhatsApp göndermez
+- Outreach sequence çalıştırmaz
+- CRM yazımı yapmaz
+
+GODMODE’un görevi yalnızca:
+- Lead discovery
+- Enrichment
+- Skorlama
+- AI decision artifact üretimi
+
+GODMODE çıktıları **başka modüller tarafından tüketilmek üzere üretilir**.
 - Lead için “AI Lead Brain Snapshot” oluşturmak.
 - Çoklu kaynaktan toplanan sinyalleri birleştirmek:
   - Discovery / GODMODE sinyalleri (kaynak, provider, kategori)
@@ -836,6 +864,32 @@ Modül, büyük ölçekli veri taramaları, job yönetimi, event-log tabanlı iz
 - Lead pipeline entegrasyonu:
   - Normalize edilmiş veriler **potential_leads** tablosuna UPSERT edilir
   - Duplicate koruması vardır
+
+---
+
+### AI Decision Artifacts (GODMODE v3.x)
+
+GODMODE, aşağıdaki **AI karar artefaktlarını** üretir:
+
+- **Lead Ranking**
+  - A / B / C band
+  - priority_score
+- **Auto‑SWOT**
+  - strengths / weaknesses / opportunities / threats
+- **Sales Entry Strategy**
+  - recommended_entry
+  - why_now
+  - red_flags
+- **Outreach Draft (Hazırlık Amaçlı)**
+  - Kanal / ton / açılış yaklaşımı
+  - **Gönderim yapmaz**
+
+Bu artefaktlar:
+- `brain`
+- `outreach`
+- `leadDashboard`
+
+modülleri tarafından **read‑only** şekilde tüketilir.
 
 ---
 
@@ -2091,3 +2145,16 @@ Faz 2–3 entegrasyonuyla:
 - WhatsApp/Email → gerçek API gönderimleri
 
 **Sonuç:** CNG AI Agent tam otomatik müşteri edinme makinesine dönüşür.
+
+---
+
+## Modüller Arası Sözleşme — Özet
+
+- **GODMODE** → Keşif + karar artefaktları
+- **Intel / Research** → Derin analiz
+- **Brain** → Çoklu sinyal birleştirme
+- **Outreach** → Mesaj & sekans üretimi
+- **Email / WhatsApp** → Tek icra noktası
+- **LeadDashboard** → Read‑model / agregasyon
+
+Bu sınırlar korunmadan yapılan geliştirmeler **mimari ihlal** kabul edilir.

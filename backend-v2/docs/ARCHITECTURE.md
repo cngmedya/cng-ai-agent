@@ -1,4 +1,4 @@
-# CNG AI Agent — Backend V2 Architecture Blueprint (2025-12-09)
+# CNG AI Agent — Backend V2 Architecture Blueprint (2025-12-25)
 
 Bu döküman, CNG AI Agent **backend-v2** için güncel ve referans mimari rehberidir.  
 Tüm yeni geliştirmeler, refactor kararları ve modül eklemeleri bu yapı üzerinden düşünülmelidir.
@@ -23,6 +23,9 @@ backend-v2
 ├── migrate_old_leads.js
 ├── package-lock.json
 ├── package.json
+├── scripts
+│   ├── smoke_godmode_min.sh
+│   └── smoke_test.sh
 └── src
     ├── app.js
     ├── core
@@ -41,7 +44,10 @@ backend-v2
     │   └── migrations
     │       ├── 003_create_lead_search_intel.js
     │       ├── 004_create_lead_intel_reports.js
-    │       └── 006_create_users.js
+    │       ├── 005_create_lead_cir_reports.js
+    │       ├── 006_create_users.js
+    │       ├── 007_create_lead_enrichments.js
+    │       └── 008_create_ai_artifacts.js
     ├── data
     │   ├── app.sqlite
     │   └── crm.sqlite
@@ -122,25 +128,38 @@ backend-v2
     │   │   ├── routes.js
     │   │   └── service.js
     │   ├── godmode
+    │   │   ├── ai
+    │   │   │   ├── autoSwot.prompt.js
+    │   │   │   ├── autoSwot.schema.js
+    │   │   │   ├── leadRanking.prompt.js
+    │   │   │   ├── leadRanking.schema.js
+    │   │   │   ├── outreachDraft.prompt.js
+    │   │   │   ├── outreachDraft.schema.js
+    │   │   │   ├── salesEntryStrategy.prompt.js
+    │   │   │   └── salesEntryStrategy.schema.js
     │   │   ├── api
     │   │   │   ├── controller.js
     │   │   │   └── routes.js
     │   │   ├── docs
-    │   │   │   ├── GODMODE_ROADMAP.md
-    │   │   │   └── GODMODE.md
+    │   │   │   ├── GODMODE.md
+    │   │   │   └── GODMODE_ROADMAP.md
     │   │   ├── pipeline
     │   │   │   └── discoveryPipeline.js
     │   │   ├── providers
     │   │   │   ├── googlePlacesProvider.js
     │   │   │   ├── index.js
     │   │   │   └── providersRunner.js
+    │   │   ├── services
+    │   │   │   ├── brain.service.js
+    │   │   │   ├── index.js
+    │   │   │   └── outreachTrigger.service.js
+    │   │   ├── workers
+    │   │   │   ├── dataFeederWorker.js
+    │   │   │   ├── economicAnalyzerWorker.js
+    │   │   │   └── entityResolverWorker.js
     │   │   ├── repo.js
     │   │   ├── service.js
-    │   │   ├── validator.js
-    │   │   └── workers
-    │   │       ├── dataFeederWorker.js
-    │   │       ├── economicAnalyzerWorker.js
-    │   │       └── entityResolverWorker.js
+    │   │   └── validator.js
     │   ├── intel
     │   │   ├── controller.js
     │   │   ├── docs
@@ -240,8 +259,6 @@ backend-v2
         ├── http
         └── unit
 
-79 directories, 153 files
-
 ---
 
 ## 1. Amaç ve End-to-End Akış
@@ -334,7 +351,10 @@ src/core/
   migrations/
     003_create_lead_search_intel.js
     004_create_lead_intel_reports.js
+    005_create_lead_cir_reports.js
     006_create_users.js
+    007_create_lead_enrichments.js
+    008_create_ai_artifacts.js
 ```
 
 ### 3.1 `config.js`
@@ -368,7 +388,10 @@ src/core/
 
 - **003_create_lead_search_intel.js**
 - **004_create_lead_intel_reports.js**
+- **005_create_lead_cir_reports.js**
 - **006_create_users.js**
+- **007_create_lead_enrichments.js**
+- **008_create_ai_artifacts.js**
 
 Bu migration’lar `app.sqlite` içinde lead intel ve kullanıcı yönetimi için gerekli tabloları oluşturur.
 
@@ -553,6 +576,15 @@ src/modules/discovery/
 
 ```text
 src/modules/godmode/
+  ai/
+    autoSwot.prompt.js
+    autoSwot.schema.js
+    leadRanking.prompt.js
+    leadRanking.schema.js
+    outreachDraft.prompt.js
+    outreachDraft.schema.js
+    salesEntryStrategy.prompt.js
+    salesEntryStrategy.schema.js
   api/
     controller.js
     routes.js
@@ -565,12 +597,16 @@ src/modules/godmode/
     googlePlacesProvider.js
     index.js
     providersRunner.js
+  services/
+    brain.service.js
+    outreachTrigger.service.js
+    index.js
   workers/
     dataFeederWorker.js
     economicAnalyzerWorker.js
     entityResolverWorker.js
-  service.js
   repo.js
+  service.js
   validator.js
 ```
 
@@ -730,6 +766,7 @@ src/modules/whatsapp/
   - Lead’ler ile WhatsApp üzerinden mesajlaşma.
   - Geçmiş konuşmaların AI tarafından analiz edilmesi (ileriki fazlarda).
 
+
 ---
 
 ## 8. Testler (`src/tests/`)
@@ -789,7 +826,31 @@ Bu blueprint ile **sabit kabul edilen** ana prensipler:
 5. **Devlog zorunluluğu**
    - Büyük değişiklikler ve mimari kararlar mutlaka `docs/devlogs/` altına işlenir.
 
+---
+
+## Güncel Mimari Sözleşmesi — Modüller Arası Sınırlar (Bağlayıcı)
+
+Backend-v2 mimarisi, modüller arası **kesin sorumluluk sınırları** ile korunur:
+
+- GODMODE → Keşif + enrichment + **decision artifacts** üretir, **icra etmez**
+- Intel / Research → **Deep intelligence** üretir, icra etmez
+- Brain → Çoklu sinyali birleştirir, strateji üretir
+- Outreach → Mesaj / kanal / zamanlama **hazırlar**
+- OutreachScheduler → Zamanlama ve enqueue yönetir
+- Email / WhatsApp → **Tek icra sorumlusu** (provider, retry, delivery, bounce, opt-out)
+
+### Debug ve Doğrulama Altın Kuralı
+Her kritik pipeline için doğrulama sırası sabittir:
+
+1. Count (metric)
+2. Queue (enqueue)
+3. Worker (execute)
+4. Write (DB insert)
+
+Bu zincir tamamlanmadan sistem “çalışıyor” kabul edilmez.
+
+Detaylı veri kontratları:
+`backend-v2/docs/Master Document.md` → **3.1 Modüller Arası Veri Kontratları**
+
 Bu dosya, backend-v2 için **güncel mimari harita** olarak kabul edilmelidir.  
 Yeni modüller eklerken veya büyük refactor’lar yaparken, önce buradaki yapıya uyum kontrol edilir; gerekirse bu blueprint kontrollü şekilde güncellenir.
-
-

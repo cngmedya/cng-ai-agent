@@ -117,7 +117,7 @@ Providers:
 - [ ] 2.D.3.2 SEO signals (indexability, meta, schema)
 - [ ] 2.D.3.3 Social footprint enrichment
 - [ ] 2.D.3.4 Ad / tracking signals
-- [ ] 2.D.3.5 AI-ranker integration v2  
+- [x] 2.D.3.5 AI-ranker integration v2 (GODMODE AI decision artifacts: lead ranking / strategy / draft)  
 
 ---
 
@@ -159,9 +159,16 @@ Providers:
 - [ ] Lead context memory  
 - [ ] Multi-platform: Email, WhatsApp, Instagram  
 
+### 4.D — Outreach Execution Guardrails (v1)
+- [x] Execution mode separation (send_now vs schedule)
+- [x] Kill-switch / policy blocking (DB logged)
+- [x] Daily cap enforcement (restart-safe)
+- [x] Dry-run SENT/FAILED events for analytics/CRM chain proof
+- [x] Mini smoke + Full smoke proof (DB assertions)
+
 ### 4.C — Autonomous Outreach  
-- [ ] Lead threshold > 80 → Auto-Outreach  
-- [ ] AI Selected Target Set  
+- [x] Lead threshold > 80 → Auto-Outreach (GODMODE auto-trigger)
+- [x] AI Selected Target Set (AI ranking + target selection)
 - [ ] Post-reply analysis  
 - [ ] CRM Auto-Update  
 
@@ -205,6 +212,8 @@ Providers:
 - Bu roadmap düzenli olarak güncellenir.  
 - Tüm GODMODE detayları ayrı dosyadadır.  
 - Yeni modüller bu dosyaya işlendiğinde MODULES.md senkronize edilir.  
+- Mini smoke testler (ör: `scripts/smoke_godmode_min.sh`) küçük faz geçişlerinde kullanılır; faz kapanışında full smoke (`scripts/smoke_test.sh`) gate’dir.  
+- “Roadmap’te yoksa yoktur” kuralı: Yeni faz/başlık eklenmeden önce bu dosyaya işlenir; sonra implementasyona geçilir.
 
 # 📌 Sprint‑Based Roadmap (Modül Bazlı Mini‑Checklist Yapısı)
 
@@ -258,6 +267,10 @@ Aşağıdaki mini‑checklist'ler her modülün sprint sırasında tamamlanması
 - [x] Multi-provider interface
 - [x] Deep-enrichment hook
 - [x] Job event logs
+- [x] AI decision artifacts (lead ranking / auto-swot / entry strategy / outreach draft)
+- [x] Outreach auto-trigger v1 (enqueue + dry-run/send_now modes)
+- [x] Outreach execution guardrails v1 (kill-switch, daily cap, policy logs)
+- [x] Mini smoke + Full smoke gates (DB assertions)
 - [ ] Worker orchestration (advanced)
 - [ ] Duplicate protection (fingerprinting)
 - [ ] Already‑discovered prevention
@@ -291,7 +304,7 @@ Aşağıdaki mini‑checklist'ler her modülün sprint sırasında tamamlanması
 - [ ] Follow‑up sequence generator  
 - [ ] Outreach history  
 - [ ] Outreach AI pipeline  
-- [ ] WhatsApp + Email + Instagram API integration stubs  
+- [ ] Email provider adapter v1 (first channel) + WhatsApp/Instagram stubs (later)  
 - [ ] Outreach Brain
 
 ---

@@ -5,10 +5,21 @@ BASE_URL="http://localhost:4000"
 JQ_BIN="${JQ:-jq}"
 LEAD_ID="${LEAD_ID_OVERRIDE:-1}"
 
+# Optional: sector/categories override for discovery jobs (JSON array string)
+CATEGORIES_OVERRIDE="${CATEGORIES_OVERRIDE:-}"
+
+# Default categories are sector-agnostic: do not force any category unless override provided
+CATEGORIES_JSON="[]"
+if [ -n "${CATEGORIES_OVERRIDE}" ]; then
+  CATEGORIES_JSON="${CATEGORIES_OVERRIDE}"
+fi
+
 echo "==============================="
 echo " CNG AI Agent – SMOKE TEST v1 "
 echo " BASE_URL = $BASE_URL"
 echo "==============================="
+echo
+echo "ℹ Categories override: ${CATEGORIES_JSON}"
 echo
 
 ###
@@ -34,7 +45,18 @@ fi
 # 1) ADMIN STATUS
 ###
 echo "▶ 1) Admin status testi..."
-curl -s "$BASE_URL/api/admin/status" | $JQ_BIN
+ADMIN_STATUS_JSON=$(curl -s "$BASE_URL/api/admin/status")
+echo "$ADMIN_STATUS_JSON" | $JQ_BIN
+
+DISCOVERY_MODE=$(echo "$ADMIN_STATUS_JSON" | $JQ_BIN -r '.data.godmode.discovery_mode // .data.discovery_mode // empty')
+
+if [ "$DISCOVERY_MODE" = "live" ] || [ "$DISCOVERY_MODE" = "1" ]; then
+  echo "🔥 DISCOVERY MODE: LIVE (Google Places aktif)"
+elif [ "$DISCOVERY_MODE" = "replay" ] || [ "$DISCOVERY_MODE" = "0" ]; then
+  echo "🧪 DISCOVERY MODE: REPLAY (DB seed kullanılıyor)"
+else
+  echo "⚠ DISCOVERY MODE: UNKNOWN (admin/status response did not expose mode)"
+fi
 echo "✔ Admin status OK"
 echo
 
@@ -75,7 +97,7 @@ JOB_ID_1=$(curl -s -X POST "$BASE_URL/api/godmode/jobs/discovery-scan" \
     "label": "SMOKE - Godmode Discovery Test",
     "city": "İstanbul",
     "country": "Türkiye",
-    "categories": ["mimarlık ofisi"],
+    "categories": '"${CATEGORIES_JSON}"',
     "minGoogleRating": 3.5,
     "maxResults": 10,
     "channels": ["google_places"],
@@ -106,7 +128,7 @@ JOB_ID_2=$(curl -s -X POST "$BASE_URL/api/godmode/jobs/discovery-scan" \
     "label": "SMOKE - Godmode Discovery Test (no forceRefresh)",
     "city": "İstanbul",
     "country": "Türkiye",
-    "categories": ["mimarlık ofisi"],
+    "categories": '"${CATEGORIES_JSON}"',
     "minGoogleRating": 3.5,
     "maxResults": 10,
     "channels": ["google_places"],
@@ -131,7 +153,7 @@ JOB_ID_3=$(curl -s -X POST "$BASE_URL/api/godmode/jobs/discovery-scan" \
     "label": "SMOKE - Godmode Discovery Test (forceRefresh second pass)",
     "city": "İstanbul",
     "country": "Türkiye",
-    "categories": ["mimarlık ofisi"],
+    "categories": '"${CATEGORIES_JSON}"',
     "minGoogleRating": 3.5,
     "maxResults": 10,
     "channels": ["google_places"],
@@ -366,6 +388,81 @@ else
 
   echo "✔ Godmode forceRefresh regression checks OK"
   echo
+fi
+
+###
+# 3E) GODMODE – OUTREACH EXECUTION ASSERTIONS (DB) [FAZ 4.D.x]
+# Not: Outreach auto-trigger server env ile açılabilir; sadece event varsa assert ediyoruz.
+###
+echo "▶ 3E) Godmode outreach execution assertions (DB)..."
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "⚠ sqlite3 bulunamadı: outreach DB assertions atlandı."
+  echo
+else
+  if [ ! -f "$DB_PATH" ]; then
+    echo "[ERR] SQLite DB bulunamadı: $DB_PATH"
+    exit 1
+  fi
+
+  OE_JOB_ID="$JOB_ID_1"
+
+  OE_COUNTS=$(sqlite3 "$DB_PATH" "
+    SELECT event_type || '|' || COUNT(*)
+    FROM godmode_job_logs
+    WHERE job_id='$OE_JOB_ID'
+      AND event_type IN (
+        'OUTREACH_AUTO_TRIGGER_DONE',
+        'OUTREACH_AUTO_TRIGGER_ENQUEUED',
+        'OUTREACH_EXECUTION_ATTEMPT',
+        'OUTREACH_EXECUTION_INTENT',
+        'OUTREACH_EXECUTION_DRY_RUN',
+        'OUTREACH_EXECUTION_SENT',
+        'OUTREACH_EXECUTION_FAILED',
+        'OUTREACH_EXECUTION_BLOCKED_POLICY',
+        'OUTREACH_SEND_STUB',
+        'OUTREACH_SCHEDULE_STUB'
+      )
+    GROUP BY event_type
+    ORDER BY event_type ASC;
+  " 2>/dev/null || true)
+
+  if [ -z "${OE_COUNTS}" ]; then
+    echo "  → ℹ Outreach auto-trigger events not found for job_id=$OE_JOB_ID. (Tip: start server with GODMODE_OUTREACH_AUTO_TRIGGER=1)"
+    echo "  → ✔ Skipping outreach execution assertions"
+    echo
+  else
+    echo "${OE_COUNTS}"
+    POLICY_ROW=$(echo "${OE_COUNTS}" | grep -E "OUTREACH_EXECUTION_BLOCKED_POLICY\|" || true)
+
+    # If policy blocked, accept as OK (guardrails working) and skip stricter assertions.
+    if [ -n "${POLICY_ROW}" ]; then
+      echo "✔ Outreach execution blocked by policy (guardrails OK)"
+      echo
+    else
+      if ! echo "${OE_COUNTS}" | grep -Fq "OUTREACH_AUTO_TRIGGER_DONE|"; then
+        echo "[ERR] Missing OUTREACH_AUTO_TRIGGER_DONE for job_id=$OE_JOB_ID (expected when outreach events exist)"
+        exit 1
+      fi
+
+      # Dry-run proof (FAZ 4.D.5)
+      if [ "${OUTREACH_DRY_RUN:-0}" = "1" ]; then
+        if ! echo "${OE_COUNTS}" | grep -Fq "OUTREACH_EXECUTION_DRY_RUN|"; then
+          echo "[ERR] Missing OUTREACH_EXECUTION_DRY_RUN (OUTREACH_DRY_RUN=1)"
+          exit 1
+        fi
+        if ! echo "${OE_COUNTS}" | grep -Fq "OUTREACH_EXECUTION_SENT|"; then
+          echo "[ERR] Missing OUTREACH_EXECUTION_SENT (dry-run should emit SENT for analytics/CRM chain)"
+          exit 1
+        fi
+        echo "✔ Dry-run SENT event detected (FAZ 4.D.5)"
+        echo
+      else
+        echo "  → ℹ OUTREACH_DRY_RUN!=1 (skipping FAZ 4.D.5 dry-run assertions)"
+        echo
+      fi
+    fi
+  fi
 fi
 
 ###

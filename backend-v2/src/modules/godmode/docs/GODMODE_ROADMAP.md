@@ -1,9 +1,43 @@
 
-# GODMODE Discovery Engine — ROADMAP (v1.1.11)
-> Current focus: FAZ 3.E.2 — Channel Strategy Intelligence (v1)
+# GODMODE Discovery Engine — ROADMAP (v1.1.13)
+> Current focus: FAZ 4.E — Real Send Provider (Provider-ready; SMTP creds + DELIVERED proof deferred)
 
 Bu dosya, CNG AI Agent içerisinde yer alan **GODMODE Discovery Engine** modülünün full gelişim yol haritasıdır.  
 Her aşama production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan maddeler işaretlenerek ilerleme takip edilir.
+
+
+## Son Oturum Notları (2026-01-21)
+
+- FAZ 4.E “queue_only” execution path uçtan uca doğrulandı (Count → Queue → Worker → Write).
+- `OUTREACH_EXECUTION_MODE=queue` alias normalize edildi → `queue_only` ile uyumlu hale getirildi (MODE_NOT_IMPLEMENTED sarmalı kapatıldı).
+- Lead resolve guardrail: email yokken controlled test için `OUTREACH_TEST_TO=test@noqse.com` ile fallback recipient desteklendi (Google Places email vermez).
+- Queue persistence modeli: ayrı `outreach_queue` tablosu yok; enqueue state `godmode_job_logs` event’leri ile tutuluyor (`OUTREACH_ENQUEUED`).
+- Outreach worker çalıştırma standardı:
+  - CLI entrypoint eklendi: `node -r dotenv/config src/modules/outreach/worker.js <jobId> [limit]`
+  - `.env` export edilmezse provider tarafı `SMTP_DISABLED/MISSING_ENV` ile deterministik fail verir (beklenen).
+- Real send rollout kararı: Frontend bitene kadar güvenlik için `OUTREACH_SMTP_ENABLED=0` (Yol 1). Allowlist gate aktif tutulur.
+- Kanıt job’ları (örnek): `d68ea900-2179-42d1-9ce0-fc549b4bad44` → `OUTREACH_ENQUEUED|10` + `OUTREACH_FAILED|10 (MISSING_ENV)`; provider path gerçek, SMTP creds eksik.
+- Idempotency: `job + lead + channel` kombinasyonunda duplicate send engellenir (skipped=true).
+
+- Smoke Test Strategy & Replay Policy (LOCKED):
+  - Mini Smoke (`./scripts/smoke_godmode_min.sh`)
+    - Amaç: hızlı iterasyon, regresyon yakalama
+    - Varsayılan mod: REPLAY (DB seed / replay)
+    - External provider çağrısı YOK (Google Places çağrılmaz)
+    - Günlük / küçük kod değişikliklerinde zorunlu kontrol
+  - Full Smoke (`./scripts/smoke_test.sh`)
+    - Amaç: uçtan uca gerçek sistem doğrulaması
+    - Varsayılan mod: LIVE (gerçek Google Places verisi)
+    - Kullanım kuralı: sadece büyük modül değişiklikleri, faz geçişleri ve release öncesi
+    - Google API maliyeti bilinçli ve kontrollü kabul edilir
+  - Kural:
+    - Yeni FAZ geçişi öncesi Full Smoke PASS zorunludur
+    - Mini Smoke, Full Smoke’un yerine geçmez (sadece iterasyon aracıdır)
+  - Operasyonel netlik:
+    - Full Smoke her zaman LIVE çalışır (REPLAY’e alınmaz).
+    - Sadece major değişikliklerde, faz geçişlerinde ve release öncesinde koşturulur.
+    - Amaç doğruluk doğrulamasıdır; maliyet bilinçli olarak kabul edilir.
+
 
 ## Son Oturum Notları (2025-12-23)
 
@@ -35,7 +69,14 @@ Her aşama production seviyesine uygun şekilde tasarlanmıştır ve tamamlanan 
 
 - Phase transition rule: **Before advancing to a new FAZ, Full Smoke (`./scripts/smoke_test.sh`) must pass green.** Mini smoke is for iteration only.
 
-- 2025-12-25: smoke_test.sh 3B deep-enrichment assertions hardened: deep enrichment is optional; when the deep-enrichment worker is not running, the test emits WARN + SKIP instead of false-failing. Strict persistence asserts run only when worker signals exist (accepts V2 or legacy persist OK events).
+-- 2025-12-25: smoke_test.sh 3B deep-enrichment assertions hardened: deep enrichment is optional; when the deep-enrichment worker is not running, the test emits WARN + SKIP instead of false-failing. Strict persistence asserts run only when worker signals exist (accepts V2 or legacy persist OK events).
+- 2025-12-25: FAZ 3.E Channel Strategy (v1) tamamlandı: service wiring + ai_artifacts persist (channel_strategy_v1) + job log events (AI_CHANNEL_STRATEGY_*) + mini smoke assertion (4.3) eklendi; Full smoke yeşil doğrulandı (faz geçiş gate).
+ 
+- 2025-12-26: Outreach execution hattı stabilize edildi: `OUTREACH_EXECUTION_ENABLED` + `OUTREACH_DAILY_CAP` policy davranışları doğrulandı; mini smoke + full smoke yeşil.
+- 2025-12-26: WhatsApp strategy korunarak execution-only fallback eklendi: whatsapp seçilirse provider hazır olana kadar email’e downshift edilir.
+  - Event: `OUTREACH_CHANNEL_FALLBACK` (from=whatsapp, to=email)
+  - Not: Strategy ≠ Execution (WhatsApp provider geldiğinde fallback otomatik devre dışı kalır)
+- 2025-12-26: Full smoke gate tekrar koşuldu: `./scripts/smoke_test.sh` PASS (Godmode → Deep Enrichment → Outreach → Research(CIR) uçtan uca).
 ---
 
 # FAZ 1 — CORE DISCOVERY ENGINE (MVP → STABLE)
@@ -720,7 +761,6 @@ Discovery sonuçlarının otomatik analiz edilmesi.
 
 ## **3.D — Auto-Sales Entry Strategy**
 
-### 3.D.1 — Sales Entry Strategy (v1 minimal) ✅ DONE — v1.1.10
 - [x] Prompt: `ai/salesEntryStrategy.prompt.js` (strict JSON)
 - [x] Schema: `ai/salesEntryStrategy.schema.js` (additionalProperties=false)
 - [x] Service wiring: deterministic “brain sample” pipeline stage (top‑10 sample)
@@ -738,6 +778,7 @@ Discovery sonuçlarının otomatik analiz edilmesi.
   - [x] LLM kapalıyken deterministik fallback ile çalışır
   - [x] LLM açıkken strict JSON schema ile validate edilir
   - [x] DB kanıtı: job log + `ai_artifacts(sales_entry_strategy_v1) >= 1`
+  - [x] Full smoke green (faz geçiş gate)
 ## **3.E — Next Brain Artifact (Decision Phase)**
 
 Bu faz, FAZ 3’ün **karar noktasıdır**.  
@@ -782,20 +823,42 @@ Bu adım geçilmeden **hiçbir yeni AI dosyası açılmaz**.
 
 ---
 
-### **3.E.2 — Aday Brain Artefact’ler**
+### **3.E.2 — Aday Brain Artefact’ler (DECISION) ✅ DONE**
 
 Bu listeden **yalnızca biri** seçilip uygulanacaktır:
 
 - [ ] **Follow‑up Timing / Cadence**
   - “Bu lead’e ne zaman tekrar yazmalıyız?”
-- [x] **Channel Strategy Intelligence (SELECTED)**
+- [x] **Channel Strategy Intelligence (SELECTED + IMPLEMENTED)**
   - “İlk temas için ideal kanal + alternatif plan”
 - [ ] **Deal Probability / Win Likelihood**
   - “Bu lead’in satışa dönüşme ihtimali”
 - [ ] **Objection Handling Angle**
   - “En muhtemel itiraz ve buna karşı argüman”
 
+
 > Kural: 3.E tamamlanmadan FAZ 4’e veya yeni AI prompt’larına geçilmez.
+
+### **3.E.3 — Channel Strategy (v1 minimal) ✅ DONE — v1.1.11**
+
+- [x] Prompt: `ai/channelStrategy.prompt.js` (strict JSON)
+- [x] Schema: `ai/channelStrategy.schema.js` (additionalProperties=false)
+- [x] Service wiring: A/B band only, LLM opt‑in `GODMODE_AI_CHANNEL_STRATEGY=1`, deterministic heuristic fallback
+- [x] Job log events:
+  - [x] `AI_CHANNEL_STRATEGY_GENERATED`
+  - [x] `AI_CHANNEL_STRATEGY_DONE`
+- [x] Persistence:
+  - [x] `ai_artifacts` insert (`artifact_type='channel_strategy_v1'`)
+  - [x] Observability: `AI_CHANNEL_STRATEGY_PERSISTED` + `AI_CHANNEL_STRATEGY_PERSIST_ERROR` (negatif kanıt; olmamalı)
+- [x] Smoke test proof:
+  - [x] Mini smoke: `./scripts/smoke_godmode_min.sh` içine `4.3 Channel Strategy` DB assertion eklendi
+  - [x] Full smoke green (`./scripts/smoke_test.sh`) — faz geçiş gate
+
+- [x] **Definition of Done (DoD) — LOCKED**
+  - [x] LLM kapalıyken deterministik fallback ile çalışır
+  - [x] LLM açıkken strict JSON schema ile validate edilir
+  - [x] DB kanıtı: job log + `ai_artifacts(channel_strategy_v1) >= 1`
+  - [x] Mini smoke + Full smoke green (release gate)
 
 # FAZ 4 — FULL AUTOMATION & OUTREACH ECOSYSTEM (ENTERPRISE MODE)
 
@@ -811,11 +874,115 @@ Bu listeden **yalnızca biri** seçilip uygulanacaktır:
 - [ ] Çok aşamalı enrichment pipeline  
 - [ ] Retry & error recovery mekanizması  
 
-## **4.C — Outreach Auto-Trigger**
+## **4.C — Outreach Auto-Trigger (DONE)**
 
-- [ ] Lead threshold > 80 ise otomatik outreach  
-- [ ] Outreach Scheduler entegrasyonu  
-- [ ] AI tarafından seçilen hedef setleri  
+- [x] Lead threshold > 80 ise otomatik outreach  
+- [x] Outreach Scheduler entegrasyonu  
+- [x] AI tarafından seçilen hedef setleri  
+- [x] Kanıt: Mini smoke + Full smoke green + DB job logs (`OUTREACH_AUTO_TRIGGER_ENQUEUED`, `OUTREACH_AUTO_TRIGGER_DONE`)
+- [x] Execution compatibility: whatsapp seçimi geldiğinde provider hazır olana kadar email fallback (execution-only) — `OUTREACH_CHANNEL_FALLBACK`
+
+## **4.D — Outreach Execution Guardrails (DONE)**
+
+**Durum:** ✅ DONE — 4.D.1–4.D.5 tamamlandı. Mini + Full smoke ile kanıtlandı.
+
+### 4.D.1 — Execution Mode & Kill-Switch (v1) ✅ DONE
+- [x] ENV: `OUTREACH_EXECUTION_ENABLED`
+- [x] ENV: `OUTREACH_EXECUTION_MODE=stub|send_now|queue_only|schedule`
+- [x] Varsayılan: `stub` (no external send; sadece stub event)
+- [x] Guardrail log: `OUTREACH_EXECUTION_BLOCKED_POLICY` (reason=`KILL_SWITCH`)
+- [x] Observability: `OUTREACH_EXECUTION_ATTEMPT` (provider/provider_id/mode)
+
+**Kanıt:** Mini smoke mode-aware assert (send_now → `OUTREACH_SEND_STUB`, schedule → `OUTREACH_SCHEDULE_STUB`) + DB job logs doğrulandı (2025-12-25).
+
+### 4.D.2 — Policy Reason Standardization (v1) ✅ DONE
+### 4.D.3 — Send vs Queue Separation (v1) ✅ DONE
+- [x] Execution intent resolver: `resolveExecutionIntent()`
+- [x] Observability: `OUTREACH_EXECUTION_INTENT` (intent + mode + raw_mode)
+- [x] Intent-based branching: QUEUE / SEND / SCHEDULE / BLOCK
+- [x] Mini smoke proof: send_now → `OUTREACH_SEND_STUB` + intent=SEND
+
+- [x] Channel resolution uses execution-resolved channel (fallback-consistent) across SEND/QUEUE/SCHEDULE paths
+
+Amaç: Brain tarafındaki “neden elendi / neden ilerlemedi” kararlarını ve execution tarafındaki policy block’ları **tek vocabulary** ile loglamak.
+
+- [x] Brain observability event: `AI_POLICY_BLOCK`
+- [x] Brain reason enum (v1 minimal): `BAND_GATED`, `NO_ROUTING_CHANNEL`
+- [x] Execution reason enum (alignment): `KILL_SWITCH`, `DAILY_CAP_REACHED`, `UNSUPPORTED_CHANNEL`, `MODE_NOT_IMPLEMENTED`
+- [x] Execution (outreachTrigger) tarafında reason’lar enum üzerinden standardize edildi
+- [x] Smoke kanıtı: mini smoke yeşil + DB log’larda policy/event vocabulary doğrulandı (2025-12-25)
+
+**Kanıt sorguları (ops):**
+- `sqlite3 data/app.sqlite "SELECT event_type, COUNT(*) FROM godmode_job_logs WHERE job_id='<JOB_ID>' AND event_type IN ('AI_POLICY_BLOCK','OUTREACH_EXECUTION_BLOCKED_POLICY','OUTREACH_EXECUTION_ATTEMPT') GROUP BY event_type;"`
+
+### 4.D.4 — Daily Cap / Rate Limit (v1) ✅ DONE
+- [x] ENV: `OUTREACH_DAILY_CAP`
+- [x] DB-based daily counter (restart-safe)
+- [x] Enforcement in outreachTrigger (remainingQuota)
+- [x] Policy block event: `OUTREACH_EXECUTION_BLOCKED_POLICY` (reason=`DAILY_CAP_REACHED`)
+- [x] Mini smoke proof (cap blokluyken policy event görülür)
+- [x] Full smoke proof (policy block logged with cap/usedToday)
+
+### 4.D.5 — Dry-run Sent / Failed Events (v1) ✅ DONE
+Amaç: Gerçek send açmadan önce “gönderilmiş gibi” raporlanabilen event’lerle analytics/CRM zincirini test etmek.
+
+- [x] ENV: `OUTREACH_DRY_RUN=1`
+- [x] Event: `OUTREACH_EXECUTION_SENT` (payload: `{ dry_run:true, channel, provider, provider_id, intent, mode, raw_mode }`)
+- [x] Event: `OUTREACH_EXECUTION_FAILED` (payload: `{ dry_run:true, reason_class, error_code? }`)
+- [x] Policy ile uyum: blocked vs failed ayrımı net (blocked → `OUTREACH_EXECUTION_BLOCKED_POLICY`)
+- [x] Mini smoke proof: `smoke_godmode_min.sh` içinde dry-run açıkken `OUTREACH_EXECUTION_SENT` assert
+- [x] Full smoke proof: `smoke_test.sh` 3E DB assertion ile dry-run `SENT` kanıtı (OUTREACH_DRY_RUN=1 koşumunda)
+
+**Phase Gate:** FAZ 4.D tamamlanmadan FAZ 4.E veya gerçek send provider entegrasyonuna geçilmez.
+
+
+**FAZ 4.D STATUS:** 4.D.1–4.D.5 verified (mini + full smoke). Ready for FAZ 4.E.
+
+## **4.E — Real Send Provider (Design + Safety Gate) (IN PROGRESS → Provider-ready)**
+
+Amaç: Gerçek send açmadan önce “provider adapter + safety gate + observability” tasarımını netleştirmek ve sadece güvenli kanallarda controlled rollout yapabilmek.
+
+### 4.E.0 — Preflight (DONE) ✅
+Bu maddeler “gerçek provider” implementasyonu değildir; FAZ 4.E’ye güvenli geçişi sağlayan stabilizasyon/ön-hazırlık katmanıdır.
+
+- [x] Execution hattı stabilize: `OUTREACH_EXECUTION_ENABLED`, `OUTREACH_EXECUTION_MODE`, `OUTREACH_DAILY_CAP` policy + observability (mini + full smoke kanıtlı)
+- [x] Strategy korunarak execution-only kanal uyumluluğu: whatsapp seçimi geldiğinde provider hazır olana kadar email fallback (`OUTREACH_CHANNEL_FALLBACK`)
+- [x] Full smoke gate: `./scripts/smoke_test.sh` PASS (2025-12-26)
+- [x] Scope kararı (v1 rollout): **ilk canlı send kanalı = email** (WhatsApp provider entegrasyonu ayrı deliverable)
+
+### 4.E.1 — Scope Lock (Provider & Channel) ✅ REQUIRED
+- [x] İlk canlı kanal seçimi (v1): `email` (WhatsApp provider ayrı deliverable)
+- [x] İlk provider seçimi (v1): `smtp` 
+- [ ] Bu faz tamamlanana kadar yalnız “controlled allowlist” ile çalışır (no broad send)
+
+### 4.E.2 — Provider Adapter Interface (Outreach Module) (v1) ✅ REQUIRED
+- [x] `modules/outreach/providers/` altında standard interface:
+  - [x] `sendMessage({ lead, message, channel, meta })`
+  - [x] `dryRun({ ... })` (opsiyonel; Godmode D5 zaten event üretiyor)
+  - [x] Return contract: `{ ok, provider_message_id?, error_code?, error_message? }`
+- [x] Godmode sadece “execution request” üretir; gerçek send Outreach modülünde kalır (boundary korunur)
+
+### 4.E.3 — Safety Gate (Hard Blocks) (v1) ✅ REQUIRED
+- [x] Kill-switch (mevcut): `OUTREACH_EXECUTION_ENABLED`
+- [x] Allowlist gate: `OUTREACH_ALLOWLIST_EMAILS` / `OUTREACH_ALLOWLIST_DOMAINS` (+ override: `OUTREACH_ALLOW_ALL=1`)
+- [x] Rate limit (mevcut): `OUTREACH_DAILY_CAP`
+- [x] Channel policy: sadece `email|whatsapp` (instagram/linkedin/phone kapalı)
+- [x] Observability: blocked → `OUTREACH_EXECUTION_BLOCKED_POLICY` (reason enum genişletilebilir)
+
+### 4.E.4 — Real Send Wiring (Queue → Worker) (v1) ✅ REQUIRED
+- [x] Send intent geldiğinde: enqueue → outreach worker execute
+- [x] Worker success: `OUTREACH_EXECUTION_SENT` (dry_run:false) + provider_message_id (SMTP creds ile DELIVERED proof sonraya ertelendi)
+- [x] Worker fail: `OUTREACH_FAILED` (dry_run:false) + error_code (örn: `MISSING_ENV`, `SMTP_DISABLED`)
+- [x] Idempotency: aynı lead + job + channel için duplicate send engeli (dedup key)
+
+### 4.E.5 — Proof (Mini + Full Smoke) ✅ GATE
+- [x] Mini smoke: queue_only + guardrails deterministik doğrulandı (auto-trigger + intent + enqueue + worker consume + OUTREACH_FAILED (MISSING_ENV) kanıtı)
+- [ ] Full smoke: 3E DB assertions genişletilir (unchecked SMTP sonrası)
+- [ ] Phase transition rule: Full smoke green olmadan FAZ 4.F/5’e geçilmez
+
+**Phase Gate:** FAZ 4.E tamamlanmadan gerçek provider send prod’da açılmaz.
+
+**4.E STATUS (2026-01-21):** Provider-ready ✅ (queue_only + worker + allowlist + observability). SMTP creds + first DELIVERED proof → Deferred (frontend sonrası).
 
 ---
 

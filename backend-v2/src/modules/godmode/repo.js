@@ -308,6 +308,42 @@ function upsertPotentialLead({
   };
 }
 
+function getPotentialLeadByProviderId({ provider, providerId }) {
+  const db = getDb();
+
+  const row = db
+    .prepare(
+      `
+      SELECT id, provider, provider_id, raw_payload_json
+      FROM potential_leads
+      WHERE provider = ?
+        AND provider_id = ?
+      LIMIT 1
+    `,
+    )
+    .get(provider, String(providerId));
+
+  if (!row) return null;
+
+  const raw = safeParseJson(row.raw_payload_json, null);
+
+  const email =
+    raw && typeof raw === 'object'
+      ? raw.email ||
+        (Array.isArray(raw.emails) && raw.emails[0] ? raw.emails[0] : null) ||
+        (raw.contact && raw.contact.email ? raw.contact.email : null) ||
+        null
+      : null;
+
+  return {
+    id: row.id,
+    provider: row.provider,
+    provider_id: row.provider_id,
+    raw_payload: raw,
+    email: email || null,
+  };
+}
+
 /**
  * DB satırını job objesine çevir
  */
@@ -612,6 +648,68 @@ function appendJobLog(jobId, eventType, payload) {
   });
 }
 
+function logJobEvent(jobId, eventType, payload) {
+  return appendJobLog(jobId, eventType, payload);
+}
+
+function hasOutreachEnqueue({ jobId, provider, providerId }) {
+  const db = getDb();
+
+  const row = db
+    .prepare(
+      `
+      SELECT
+        id
+      FROM godmode_job_logs
+      WHERE job_id = ?
+        AND event_type IN ('OUTREACH_AUTO_TRIGGER_ENQUEUED','OUTREACH_ENQUEUED')
+        AND payload_json LIKE ?
+      LIMIT 1
+    `,
+    )
+    .get(jobId, `%\"provider\":\"${provider}\"%\"provider_id\":\"${String(providerId)}\"%`);
+
+  return Boolean(row);
+}
+
+// FAZ 4.D.4 — Daily Cap / Rate Limit (repo side, v1 minimal)
+function countTodayOutreachExecutions({ provider }) {
+  const db = getDb();
+  const { start, end } = getTodayBounds();
+
+  const row = db
+    .prepare(
+      `
+      SELECT COUNT(*) AS cnt
+      FROM godmode_job_logs
+      WHERE event_type IN (
+        'OUTREACH_AUTO_TRIGGER_ENQUEUED',
+        'OUTREACH_SEND_STUB',
+        'OUTREACH_SCHEDULE_STUB'
+      )
+        AND created_at BETWEEN ? AND ?
+        ${provider ? 'AND payload_json LIKE ?' : ''}
+    `,
+    )
+    .get(
+      provider
+        ? [start, end, `%\"provider\":\"${provider}\"%`]
+        : [start, end],
+    );
+
+  return row && typeof row.cnt === 'number' ? row.cnt : 0;
+}
+function getTodayBounds() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
+}
+
 /**
  * AI Artifacts (read-only persistence layer)
  * Table (expected):
@@ -726,6 +824,52 @@ function getLatestAiArtifactByLeadId(leadId, artifactType) {
     if (msg && msg.toLowerCase().includes('no such table')) {
       return null;
     }
+    return null;
+  }
+}
+
+function getLatestAiArtifactByJobProviderId({ jobId, provider, providerId, artifactType }) {
+  const db = getDb();
+
+  try {
+    const row = db
+      .prepare(
+        `
+        SELECT
+          id,
+          job_id,
+          lead_id,
+          provider,
+          provider_id,
+          artifact_type,
+          artifact_json,
+          created_at
+        FROM ai_artifacts
+        WHERE job_id = ?
+          AND provider = ?
+          AND provider_id = ?
+          AND artifact_type = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      )
+      .get(jobId, provider, String(providerId), artifactType);
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      job_id: row.job_id,
+      lead_id: row.lead_id,
+      provider: row.provider,
+      provider_id: row.provider_id,
+      artifact_type: row.artifact_type,
+      artifact: safeParseJson(row.artifact_json, null),
+      created_at: row.created_at,
+    };
+  } catch (e) {
+    const msg = e && (e.message || String(e));
+    if (msg && msg.toLowerCase().includes('no such table')) return null;
     return null;
   }
 }
@@ -1111,8 +1255,12 @@ module.exports = {
   updateJob,
   getJobById,
   appendJobLog,
+  logJobEvent,
   getJobLogs,
+  hasOutreachEnqueue,
+  countTodayOutreachExecutions,
   upsertPotentialLead,
+  getPotentialLeadByProviderId,
   appendDeepEnrichmentStage,
   getDeepEnrichmentLogs,
   enqueueDeepEnrichmentCandidates,
@@ -1122,5 +1270,6 @@ module.exports = {
   getLatestLeadEnrichmentByLeadId,
   insertAiArtifact,
   getLatestAiArtifactByLeadId,
+  getLatestAiArtifactByJobProviderId,
   listAiArtifactsByJobId,
 };

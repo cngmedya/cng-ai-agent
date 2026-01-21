@@ -26,6 +26,28 @@ const outreachDraftPrompt = require('./ai/outreachDraft.prompt');
 const outreachDraftSchema = require('./ai/outreachDraft.schema');
 const salesEntryStrategyPrompt = require('./ai/salesEntryStrategy.prompt');
 const salesEntryStrategySchema = require('./ai/salesEntryStrategy.schema');
+let channelStrategyPrompt = null;
+let channelStrategySchema = null;
+
+try {
+  channelStrategyPrompt = require('./ai/channelStrategy.prompt');
+} catch {}
+
+try {
+  channelStrategySchema = require('./ai/channelStrategy.schema');
+} catch {}
+
+const { brainService, outreachTriggerService } = require('./services');
+
+function resolveDiscoveryMode() {
+  const raw = process.env.GODMODE_DISCOVERY_MODE;
+  if (!raw) return 'replay';
+
+  const v = String(raw).toLowerCase();
+  if (v === '1' || v === 'live' || v === 'true') return 'live';
+  if (v === 'mock') return 'mock';
+  return 'replay';
+}
 
 /**
  * In-memory job store (v1.x) + SQLite sync
@@ -49,20 +71,22 @@ const COLLECT_DEEP_ENRICHMENT_IDS =
     ? process.env.GODMODE_DEEP_ENRICHMENT_COLLECT_IDS === '1'
     : true;
 const DEEP_ENRICHMENT_IDS_CAP = Number(process.env.GODMODE_DEEP_ENRICHMENT_IDS_CAP || 200);
+
 const DEEP_ENRICHMENT_QUEUE_CHUNK = Number(process.env.GODMODE_DEEP_ENRICHMENT_QUEUE_CHUNK || 50);
+// FAZ 4.C — Outreach auto-trigger flag (enqueue only)
+const ENABLE_OUTREACH_AUTO_TRIGGER = process.env.GODMODE_OUTREACH_AUTO_TRIGGER === '1';
 
 /**
- * MODE:
- * GODMODE_DISCOVERY_MODE=0 -> MOCK
- * GODMODE_DISCOVERY_MODE=1 -> LIVE (Google Places)
+ * DISCOVERY MODE (server process)
+ * - 0 / replay / mock => no external calls (DB replay provider)
+ * - 1 / live / true   => real Google Places
  */
 function isLiveDiscoveryMode() {
-  const raw = process.env.GODMODE_DISCOVERY_MODE;
-  if (!raw) return false; // varsayılan: mock
+  return resolveDiscoveryMode() === 'live';
+}
 
-  if (raw === '1') return true;
-  const lowered = String(raw).toLowerCase();
-  return lowered === 'live' || lowered === 'true';
+function getDiscoveryModeLabel() {
+  return resolveDiscoveryMode();
 }
 
 /**
@@ -609,6 +633,116 @@ async function generateOutreachDraft(input) {
   }
 }
 
+function validateChannelStrategyOutput(obj) {
+  if (!obj || typeof obj !== 'object') return { ok: false, reason: 'NOT_OBJECT' };
+
+  const primary = obj.primary_channel;
+  const fallbacks = obj.fallback_channels;
+  const reasoning = obj.channel_reasoning;
+  const conf = obj.confidence;
+
+  const chOk =
+    primary === 'email' ||
+    primary === 'whatsapp' ||
+    primary === 'instagram' ||
+    primary === 'linkedin' ||
+    primary === 'phone';
+
+  const fallbacksOk =
+    Array.isArray(fallbacks) &&
+    fallbacks.length >= 1 &&
+    fallbacks.length <= 4 &&
+    fallbacks.every(x =>
+      x === 'email' ||
+      x === 'whatsapp' ||
+      x === 'instagram' ||
+      x === 'linkedin' ||
+      x === 'phone',
+    );
+
+  const reasoningOk =
+    typeof reasoning === 'string' &&
+    reasoning.trim().length >= 12 &&
+    reasoning.trim().length <= 260;
+
+  const confOk = conf === 'low' || conf === 'medium' || conf === 'high';
+
+  if (!chOk) return { ok: false, reason: 'BAD_PRIMARY_CHANNEL' };
+  if (!fallbacksOk) return { ok: false, reason: 'BAD_FALLBACKS' };
+  if (!reasoningOk) return { ok: false, reason: 'BAD_REASONING' };
+  if (!confOk) return { ok: false, reason: 'BAD_CONFIDENCE' };
+
+  return { ok: true };
+}
+
+function heuristicChannelStrategy(input) {
+  const websiteMissing = input && input.website_missing === true;
+  const band = input && input.ai_score_band ? String(input.ai_score_band) : 'C';
+
+  if (websiteMissing) {
+    return {
+      primary_channel: 'whatsapp',
+      fallback_channels: ['instagram', 'phone', 'email'],
+      channel_reasoning:
+        'Web sitesi yoksa en hızlı dönüş genelde WhatsApp/telefon ile alınır; Instagram ikinci temas kanalıdır, e-posta en sonda.',
+      confidence: band === 'A' ? 'high' : 'medium',
+      _source: 'heuristic_v1',
+    };
+  }
+
+  return {
+    primary_channel: 'email',
+    fallback_channels: ['linkedin', 'whatsapp', 'phone'],
+    channel_reasoning:
+      'Web sitesi olan işletmelerde e-posta daha düzenli ve izlenebilir ilk temas sağlar; LinkedIn/WhatsApp/telefon alternatif kanallardır.',
+    confidence: band === 'A' ? 'high' : 'medium',
+    _source: 'heuristic_v1',
+  };
+}
+
+async function callChannelStrategyLLM(input) {
+  if (!channelStrategyPrompt || !channelStrategySchema) {
+    throw new Error('CHANNEL_STRATEGY_PROMPT_OR_SCHEMA_MISSING');
+  }
+
+  const system = channelStrategyPrompt?.system ? String(channelStrategyPrompt.system) : '';
+  const userBase = channelStrategyPrompt?.user ? String(channelStrategyPrompt.user) : '';
+  const user = `${userBase}\n\nINPUT_JSON:\n${JSON.stringify(input)}`;
+
+  if (llmClient?.chatJson) {
+    return llmClient.chatJson({ system, user, schema: channelStrategySchema });
+  }
+
+  if (llmClient?.completeJson) {
+    return llmClient.completeJson({ system, user, schema: channelStrategySchema });
+  }
+
+  const text = await llmClient.chat({ system, user });
+  return typeof text === 'string' ? safeJsonParse(text) : text;
+}
+
+async function generateChannelStrategy(input) {
+  const useLlm = process.env.GODMODE_AI_CHANNEL_STRATEGY === '1';
+
+  if (!useLlm) {
+    return heuristicChannelStrategy(input);
+  }
+
+  try {
+    const out = await callChannelStrategyLLM(input);
+    const validated = validateChannelStrategyOutput(out);
+    if (validated.ok) return { ...out, _source: 'llm_v1' };
+
+    return { ...heuristicChannelStrategy(input), _source: 'heuristic_fallback_invalid_llm' };
+  } catch (err) {
+    return {
+      ...heuristicChannelStrategy(input),
+      _source: 'heuristic_fallback_llm_error',
+      _llm_error: String(err.message || err),
+    };
+  }
+}
+
 
 /**
  * Startup’ta DB’den job’ları hydrate et.
@@ -982,9 +1116,39 @@ function markJobCompleted(job) {
   jobs.set(job.id, job);
   updateJob(job);
 
+  const completedStatsRaw =
+    job.result_summary && job.result_summary.stats
+      ? job.result_summary.stats
+      : {};
+
+  const completedStats =
+    completedStatsRaw && typeof completedStatsRaw === 'object'
+      ? { ...completedStatsRaw }
+      : {};
+
+  if (typeof completedStats.discovery_mode !== 'string' || !completedStats.discovery_mode) {
+    completedStats.discovery_mode = getDiscoveryModeLabel();
+  }
+
+  if (!Array.isArray(completedStats.providers_used)) {
+    completedStats.providers_used = [];
+  }
+
+  // Deterministic REPLAY labeling: avoid ambiguous channel-only label
+  if (completedStats.discovery_mode === 'replay') {
+    if (
+      completedStats.providers_used.includes('google_places') &&
+      !completedStats.providers_used.includes('google_places_replay')
+    ) {
+      completedStats.providers_used = completedStats.providers_used.map(p =>
+        p === 'google_places' ? 'google_places_replay' : p
+      );
+    }
+  }
+
   logJobEvent(job.id, 'COMPLETED', {
     progress: job.progress,
-    stats: job.result_summary && job.result_summary.stats,
+    stats: completedStats,
   });
 }
 
@@ -1224,7 +1388,8 @@ async function runDiscoveryJobMock(job) {
     stats: {
       found_leads: foundLeads,
       enriched_leads: enrichedLeads,
-      providers_used: ['google_places'],
+      discovery_mode: 'mock',
+      providers_used: ['mock'],
     },
     sample_leads: [],
     provider_errors: [],
@@ -1356,6 +1521,7 @@ async function runGooglePlacesDiscovery(criteria, jobForLogging) {
   return {
     leads,
     providers_used: ['google_places'],
+    discovery_mode: 'live',
     used_categories: usedCategories,
     provider_errors: providerErrors,
   };
@@ -1377,6 +1543,8 @@ async function runDiscoveryJobLive(job) {
     percent: job.progress.percent,
     message: 'Provider discovery başlatıldı.',
   });
+
+  const discoveryMode = getDiscoveryModeLabel();
 
   // Faz 2: Tüm provider'ları tek yerden yöneten runner
   const discoveryResult = await runDiscoveryProviders({
@@ -1425,9 +1593,15 @@ async function runDiscoveryJobLive(job) {
 
   // FAZ 2.C.4 — Provider Bazlı Weighting (Lead Ranking v1)
   // providers_used
-  const providersUsed = Array.isArray(discoveryResult.providers_used)
+  let providersUsed = Array.isArray(discoveryResult.providers_used)
     ? discoveryResult.providers_used
     : [];
+
+  if (discoveryMode === 'replay') {
+    if (providersUsed.includes('google_places') && !providersUsed.includes('google_places_replay')) {
+      providersUsed = providersUsed.map(p => (p === 'google_places' ? 'google_places_replay' : p));
+    }
+  }
   const weightsUsed = resolveProviderWeights(criteria, providersUsed);
   const rankedLeads = applyProviderWeighting(allLeads, weightsUsed);
 
@@ -1710,17 +1884,12 @@ async function runDiscoveryJobLive(job) {
   })();
 
   if (brainSample.length > 0) {
-    // FAZ 3.A — AI Lead Ranking (v1 minimal)
-    let aiRankedCount = 0;
-    const aiRankedTop = [];
-
-    for (const s of brainSample) {
-      if (!s) continue;
-
+    const targets = brainSample.map(s => {
       const websiteMissing = !s.website;
+
       const opportunityScore = websiteMissing ? 75 : 40;
 
-      const input = {
+      return {
         job_id: job.id,
         provider: s.provider,
         provider_id: s.provider_id,
@@ -1732,290 +1901,92 @@ async function runDiscoveryJobLive(job) {
         force_refresh: forceRefresh,
         scan_count_after: null,
         rating: s && Number.isFinite(Number(s.rating)) ? Number(s.rating) : null,
-        user_ratings_total: s && Number.isFinite(Number(s.user_ratings_total)) ? Number(s.user_ratings_total) : null,
+        user_ratings_total: s && Number.isFinite(Number(s.user_ratings_total))
+          ? Number(s.user_ratings_total)
+          : null,
         opportunity_score: opportunityScore,
       };
+    });
 
-      const ranked = await rankLead(input);
-
-      aiRankedCount += 1;
-      if (aiRankedTop.length < 10) {
-        aiRankedTop.push({
-          provider: s.provider,
-          provider_id: s.provider_id,
-          name: s.name || null,
-          ai_score_band: ranked.ai_score_band,
-          priority_score: ranked.priority_score,
-          ideal_entry_channel: ranked.ideal_entry_channel,
-          why_now: ranked.why_now,
-          source: ranked._source || null,
-        });
-      }
-
-      logJobEvent(job.id, 'AI_LEAD_RANKED', {
-        provider: s.provider,
-        provider_id: s.provider_id,
-        name: s.name || null,
-        result: {
-          ai_score_band: ranked.ai_score_band,
-          priority_score: ranked.priority_score,
-          why_now: ranked.why_now,
-          ideal_entry_channel: ranked.ideal_entry_channel,
-          source: ranked._source || null,
-          llm_error: ranked._llm_error || null,
+    await brainService.runBrainPipeline({
+      job,
+      targets,
+      generators: {
+        generateLeadRanking: async (t) => {
+          return rankLead(t);
         },
-      });
-    }
-
-    logJobEvent(job.id, 'AI_LEAD_RANKING_DONE', {
-      enabled: process.env.GODMODE_AI_LEAD_RANKING === '1',
-      ranked_count: aiRankedCount,
-      top: aiRankedTop,
-    });
-
-    // FAZ 3.B — Auto-SWOT (v1 minimal) — only for A/B leads
-    const websiteByProviderId = {};
-    for (const s of brainSample) {
-      if (!s) continue;
-      websiteByProviderId[String(s.provider_id)] = s.website || null;
-    }
-
-    const swotTargets = aiRankedTop.filter(x => x && (x.ai_score_band === 'A' || x.ai_score_band === 'B'));
-    let swotCount = 0;
-    const swotTop = [];
-    const swotByProviderId = {};
-
-    for (const t of swotTargets) {
-      const website = websiteByProviderId[String(t.provider_id)] || null;
-      const websiteMissing = !website;
-
-      const swotInput = {
-        job_id: job.id,
-        provider: t.provider,
-        provider_id: t.provider_id,
-        name: t.name || null,
-        city: criteria && criteria.city ? criteria.city : null,
-        country: criteria && criteria.country ? criteria.country : null,
-        website_missing: websiteMissing,
-        website,
-        ai_score_band: t.ai_score_band,
-        priority_score: t.priority_score,
-        why_now: t.why_now,
-        ideal_entry_channel: t.ideal_entry_channel,
-      };
-
-      const swot = await generateAutoSwot(swotInput);
-      swotByProviderId[String(t.provider_id)] = swot;
-
-      swotCount += 1;
-
-      if (swotTop.length < 10) {
-        swotTop.push({
-          provider: t.provider,
-          provider_id: t.provider_id,
-          name: t.name || null,
-          ai_score_band: t.ai_score_band,
-          priority_score: t.priority_score,
-          confidence_level: swot.confidence_level,
-          sales_angle: swot.sales_angle,
-          source: swot._source || null,
-        });
-      }
-
-      logJobEvent(job.id, 'AI_AUTO_SWOT_GENERATED', {
-        provider: t.provider,
-        provider_id: t.provider_id,
-        name: t.name || null,
-        input: swotInput,
-        result: {
-          strengths: swot.strengths,
-          weaknesses: swot.weaknesses,
-          opportunities: swot.opportunities,
-          threats: swot.threats,
-          sales_angle: swot.sales_angle,
-          confidence_level: swot.confidence_level,
-          source: swot._source || null,
-          llm_error: swot._llm_error || null,
+        generateAutoSwot: async (t) => {
+          return generateAutoSwot({
+            job_id: t.job_id,
+            provider: t.provider,
+            provider_id: t.provider_id,
+            name: t.name || null,
+            city: t.city || null,
+            country: t.country || null,
+            website_missing: Boolean(t.website_missing),
+            website: t.website || null,
+            ai_score_band: t.ai_score_band || null,
+            priority_score: t.priority_score || null,
+            why_now: t.why_now || null,
+            ideal_entry_channel: t.ideal_entry_channel || null,
+          });
         },
-      });
-    }
-
-    logJobEvent(job.id, 'AI_AUTO_SWOT_DONE', {
-      enabled: process.env.GODMODE_AI_AUTO_SWOT === '1',
-      swot_count: swotCount,
-      targets_count: swotTargets.length,
-      top: swotTop,
-    });
-
-    // FAZ 3.C — Auto-Outreach Draft (v1 minimal) — only for A/B leads
-    let draftCount = 0;
-    const draftTop = [];
-    let salesCount = 0;
-
-    for (const t of swotTargets) {
-      const website = websiteByProviderId[String(t.provider_id)] || null;
-      const websiteMissing = !website;
-
-      const swot = swotByProviderId[String(t.provider_id)] || null;
-
-      const draftInput = {
-        job_id: job.id,
-        provider: t.provider,
-        provider_id: t.provider_id,
-        name: t.name || null,
-        city: criteria && criteria.city ? criteria.city : null,
-        country: criteria && criteria.country ? criteria.country : null,
-        website_missing: websiteMissing,
-        website,
-        ai_score_band: t.ai_score_band,
-        priority_score: t.priority_score,
-        why_now: t.why_now,
-        ideal_entry_channel: t.ideal_entry_channel,
-        auto_swot: swot && typeof swot === 'object'
-          ? {
-              strengths: swot.strengths,
-              weaknesses: swot.weaknesses,
-              opportunities: swot.opportunities,
-              threats: swot.threats,
-              sales_angle: swot.sales_angle,
-              confidence_level: swot.confidence_level,
-              source: swot._source || null,
-            }
-          : null,
-      };
-
-      const draft = await generateOutreachDraft(draftInput);
-      draftCount += 1;
-
-      if (draftTop.length < 10) {
-        draftTop.push({
-          provider: t.provider,
-          provider_id: t.provider_id,
-          name: t.name || null,
-          ai_score_band: t.ai_score_band,
-          priority_score: t.priority_score,
-          suggested_channel: draft.suggested_channel,
-          subject: draft.subject || null,
-          confidence_level: draft.confidence_level,
-          tone: draft.tone,
-          source: draft._source || null,
-        });
-      }
-
-      logJobEvent(job.id, 'AI_OUTREACH_DRAFT_GENERATED', {
-        provider: t.provider,
-        provider_id: t.provider_id,
-        name: t.name || null,
-        input: draftInput,
-        result: {
-          suggested_channel: draft.suggested_channel,
-          subject: draft.subject || null,
-          opening_message: draft.opening_message,
-          cta: draft.cta,
-          language: draft.language,
-          tone: draft.tone,
-          personalization_hooks: Array.isArray(draft.personalization_hooks) ? draft.personalization_hooks : [],
-          confidence_level: draft.confidence_level,
-          source: draft._source || null,
-          llm_error: draft._llm_error || null,
+        generateOutreachDraft: async (t) => {
+          return generateOutreachDraft({
+            job_id: t.job_id,
+            provider: t.provider,
+            provider_id: t.provider_id,
+            name: t.name || null,
+            city: t.city || null,
+            country: t.country || null,
+            website_missing: Boolean(t.website_missing),
+            website: t.website || null,
+            ai_score_band: t.ai_score_band || null,
+            priority_score: t.priority_score || null,
+            why_now: t.why_now || null,
+            ideal_entry_channel: t.ideal_entry_channel || null,
+            auto_swot: t.auto_swot || null,
+          });
         },
+        generateSalesEntryStrategy: async (t) => {
+          return generateSalesEntryStrategy({
+            job_id: t.job_id,
+            provider: t.provider,
+            provider_id: t.provider_id,
+            name: t.name || null,
+            website_missing: Boolean(t.website_missing),
+            website: t.website || null,
+            ai_score_band: t.ai_score_band || null,
+            priority_score: t.priority_score || null,
+            ideal_entry_channel: t.ideal_entry_channel || null,
+            auto_swot: t.auto_swot || null,
+          });
+        },
+        generateChannelStrategy: async (t) => {
+          return generateChannelStrategy({
+            job_id: t.job_id,
+            provider: t.provider,
+            provider_id: t.provider_id,
+            name: t.name || null,
+            website_missing: Boolean(t.website_missing),
+            website: t.website || null,
+            ai_score_band: t.ai_score_band || null,
+            priority_score: t.priority_score || null,
+            why_now: t.why_now || null,
+            ideal_entry_channel: t.ideal_entry_channel || null,
+            auto_swot: t.auto_swot || null,
+            sales_entry_strategy: t.sales_entry_strategy || null,
+          });
+        },
+      },
+    });
+    // FAZ 4.C — Auto-trigger outreach enqueue (A/B band only, idempotent)
+    if (ENABLE_OUTREACH_AUTO_TRIGGER) {
+      await outreachTriggerService.runOutreachAutoTrigger({
+        job,
+        targets,
       });
-
-      try {
-        const persist = insertAiArtifact({
-          jobId: job.id,
-          leadId: null,
-          provider: t.provider,
-          providerId: String(t.provider_id),
-          artifactType: 'outreach_draft_v1',
-          artifact: {
-            suggested_channel: draft.suggested_channel,
-            subject: draft.subject || null,
-            opening_message: draft.opening_message,
-            cta: draft.cta,
-            language: draft.language,
-            tone: draft.tone,
-            personalization_hooks: Array.isArray(draft.personalization_hooks)
-              ? draft.personalization_hooks
-              : [],
-            confidence_level: draft.confidence_level,
-            source: draft._source || null,
-          },
-        });
-
-        logJobEvent(job.id, 'AI_OUTREACH_DRAFT_PERSISTED', {
-          provider: t.provider,
-          provider_id: t.provider_id,
-          ok: persist && persist.ok === true,
-          reason: persist && persist.reason ? persist.reason : null,
-        });
-      } catch (err) {
-        logJobEvent(job.id, 'AI_OUTREACH_DRAFT_PERSIST_ERROR', {
-          provider: t.provider,
-          provider_id: t.provider_id,
-          error: err.message || String(err),
-        });
-      }
-
-      // FAZ 3.D — Sales Entry Strategy (v1 minimal)
-      const salesInput = {
-        job_id: job.id,
-        provider: t.provider,
-        provider_id: t.provider_id,
-        name: t.name || null,
-        website_missing: websiteMissing,
-        website,
-        ai_score_band: t.ai_score_band,
-        priority_score: t.priority_score,
-        ideal_entry_channel: t.ideal_entry_channel,
-        auto_swot: swot || null,
-      };
-
-      const salesStrategy = await generateSalesEntryStrategy(salesInput);
-      salesCount += 1;
-
-      logJobEvent(job.id, 'AI_SALES_ENTRY_STRATEGY_GENERATED', {
-        provider: t.provider,
-        provider_id: t.provider_id,
-        result: salesStrategy,
-      });
-
-      try {
-        const persistSales = insertAiArtifact({
-          jobId: job.id,
-          leadId: null,
-          provider: t.provider,
-          providerId: String(t.provider_id),
-          artifactType: 'sales_entry_strategy_v1',
-          artifact: salesStrategy,
-        });
-
-        logJobEvent(job.id, 'AI_SALES_ENTRY_STRATEGY_PERSISTED', {
-          provider: t.provider,
-          provider_id: t.provider_id,
-          ok: persistSales && persistSales.ok === true,
-        });
-      } catch (err) {
-        logJobEvent(job.id, 'AI_SALES_ENTRY_STRATEGY_PERSIST_ERROR', {
-          provider: t.provider,
-          provider_id: t.provider_id,
-          error: err.message || String(err),
-        });
-      }
     }
-
-    logJobEvent(job.id, 'AI_OUTREACH_DRAFT_DONE', {
-      enabled: process.env.GODMODE_AI_OUTREACH_DRAFT === '1',
-      draft_count: draftCount,
-      targets_count: swotTargets.length,
-      top: draftTop,
-    });
-
-    logJobEvent(job.id, 'AI_SALES_ENTRY_STRATEGY_DONE', {
-      enabled: process.env.GODMODE_AI_SALES_ENTRY === '1',
-      strategy_count: salesCount,
-      targets_count: swotTargets.length,
-    });
   }
 
   //
@@ -2627,6 +2598,7 @@ async function runDiscoveryJobLive(job) {
       raw_leads_count: rawLeads.length,
       merged_leads_count: allLeads.length,
       enriched_leads: enrichedLeads,
+      discovery_mode: discoveryMode,
       providers_used: providersUsed,
       weights_used: weightsUsed,
       used_categories: usedCategories,
@@ -2671,10 +2643,12 @@ async function runDiscoveryJob(jobId) {
   markJobRunning(job);
 
   try {
-    if (isLiveDiscoveryMode()) {
-      await runDiscoveryJobLive(job);
-    } else {
+    const discoveryMode = resolveDiscoveryMode();
+    
+    if (discoveryMode === 'mock') {
       await runDiscoveryJobMock(job);
+    } else {
+      await runDiscoveryJobLive(job);
     }
 
     //

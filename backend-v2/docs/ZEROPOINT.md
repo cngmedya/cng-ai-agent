@@ -16,7 +16,7 @@ Bu dosyanın amacı:
 
 1. Sistemin **genel mantığını**, **başlangıç hedefini** ve **scope’unu** özetlemek  
 2. Ana **iş akışını** ve **modüller arası ilişkiyi** tek bakışta göstermek  
-3. “Şu anki durum”u (2025-12-09 itibarıyla) kayda geçirmek  
+3. “Şu anki durum”u (2025-12-25 itibarıyla) kayda geçirmek  
 4. Gelecekteki sohbetlerde **“süper hafıza giriş noktası (ZeroPoint)”** olarak kullanılmak  
 
 ---
@@ -51,6 +51,10 @@ Bunu adım adım modüllerle açarsak:
    - Modüller: `godmode`, `discovery`
    - GODMODE, Google Places (ve ileride diğer provider’lar) üzerinden şirketleri bulur.
    - Sonuçlar normalize edilip `potential_leads` ve ilgili tablolara yazılır.
+
+   GODMODE bu aşamada **karar artefaktları** da üretir (lead ranking, auto-SWOT, entry strategy, outreach draft),  
+   ancak **hiçbir şekilde iletişim icrası yapmaz**. Bu çıktılar downstream modüller tarafından tüketilir.
+
    - Dedup mekanizması ile aynı şirketi tekrar tekrar listeye eklememeye çalışır.
 
 2. **Understand (Anla / Intel)**
@@ -105,8 +109,11 @@ Detaylar `docs/MODULES.md` içinde var; burada sadece **yüksek seviye harita**:
 
 - **Discovery / GODMODE**
   - `discovery` → Legacy / basit discovery + AI ranker
-  - `godmode` → Faz bazlı gelişen, multi-provider discovery engine
-    - Job management, job logs, provider runner, potential_leads pipeline
+  - `godmode` → Omni-provider discovery + enrichment + **AI decision artifact üretimi**
+    - Job management, job logs, provider runner
+    - potential_leads pipeline (dedup + upsert)
+    - AI artefaktlar: ranking, auto-SWOT, entry strategy, outreach draft
+    - ❗ Email / WhatsApp / outreach execution YOK
 
 - **Intelligence & Research**
   - `intel` → Website / SEO / on-page intel
@@ -151,7 +158,7 @@ DB şemalarının detayı: `src/core/docs/CORE_DB.md`
 
 ---
 
-## 5. Şu Anki Durum (2025-12-09 Snapshot)
+## 5. Şu Anki Durum (2025-12-25 Snapshot)
 
 Bu bölüm, backend-v2’nin “şu an nerede olduğu”nu kayda geçirir.  
 Her büyük değişiklik sonrası güncellenmelidir.
@@ -181,6 +188,18 @@ Her büyük değişiklik sonrası güncellenmelidir.
     - Provider abstraction layer için altyapı hazırlanmış durumda
     - `google_places` provider’ı üzerinden `providers_used`, `used_categories` alanları besleniyor
     - Ek provider’lar (LinkedIn, Instagram, Facebook, Yelp/Foursquare, resmi kayıtlar) için yer ayrıldı
+
+- **Faz 3 — AI Decision Artifacts (DONE)**
+  - Lead Ranking (A/B/C, priority_score)
+  - Auto-SWOT üretimi
+  - Sales Entry Strategy (why_now, risk, angle)
+  - Outreach Draft (hazırlık amaçlı)
+  - Mini smoke + full smoke testleri ile kanıtlandı
+
+- **Faz 4 — Outreach Auto-Trigger (v1)**
+  - Skor bazlı auto-trigger (enqueue only)
+  - Execution guardrails (dry-run, daily cap, kill-switch)
+  - GODMODE yalnızca tetikler, icra etmez
 
 ### 5.3. Diğer Modüller
 
@@ -217,6 +236,7 @@ Backend V2 için bazı sabit prensipler:
 4. **AI / LLM Entegrasyonu**
    - Tüm prompt’lar `src/prompts` veya modül içi `prompts/` / `ai/` klasörlerinde tutulur.
    - LLM çağrıları `shared/ai/llmClient.js` üzerinden yapılır (veya burada tanımlı pattern’le uyumlu olur).
+   - AI çıktısı üreten modül, **aksiyon alan modül değildir** (decision ≠ execution).
 
 5. **Test / Smoke Checks**
    - Büyük değişiklikler sonrası:
@@ -249,6 +269,20 @@ referans gösterildiğinde, **AI asistan (ChatGPT)** bu dosyaları okuyarak:
 - Projenin hangi fazda olduğunu ve sıradaki adımları
 
 hızlıca hafızasına yükleyebilir.
+
+---
+
+### ZEROPOINT Bağlayıcı Notu
+
+Bu dosya, backend-v2 için:
+- **“Neyi neden yaptık?”**
+- **“Hangi modül neden var?”**
+- **“İcra nerede başlar, nerede biter?”**
+
+sorularının **tek referans cevabı**dır.
+
+ARCHITECTURE.md, MODULES.md ve ROADMAP.md ile çelişen bir yorum  
+**geçersiz kabul edilir**.
 
 > Özet:  
 > Bu dört ana dosya (`ZEROPOINT`, `ARCHITECTURE`, `MODULES`, `ROADMAP`) + modül dokümanları =  
